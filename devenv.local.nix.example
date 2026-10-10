@@ -8,6 +8,7 @@
     lefthook
     # static gates used by `just lint` and the pre-push hook
     shellcheck
+    actionlint   # real GitHub Actions schema + expression/context checks
     yamllint
   ];
 }

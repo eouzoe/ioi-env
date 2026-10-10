@@ -207,7 +207,7 @@ check-vimrc:
     grep -q 'std=c++17' deploy/vimrc || { echo "  FAIL: vimrc no longer targets C++17"; exit 1; }
     grep -q 'setarch' deploy/vimrc || { echo "  FAIL: vimrc dropped the setarch -R guard"; exit 1; }
 
-# static lint of the shell script (skips cleanly if shellcheck is absent)
+# static lint of the shell script and the workflow (skips cleanly if absent)
 lint:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -222,9 +222,21 @@ lint:
       # -d relaxed: the default config treats long lines as errors, which is
       # wrong for a workflow whose comments carry the reasoning.
       yamllint -d relaxed -d "{extends: relaxed, rules: {line-length: disable}}" \
-        .github/workflows/ci.yml && echo "  ci.yml lint OK"
+        .github/workflows/ci.yml && echo "  ci.yml yamllint OK"
     else
-      echo "  yamllint not installed — skipped"
+      echo "  yamllint not installed — skipped (devenv.local.nix adds it)"
+    fi
+    if command -v actionlint >/dev/null 2>&1; then
+      # actionlint carries the real GitHub Actions schema plus semantic checks
+      # YAML parsing cannot do. It earned its place immediately: it caught a
+      # job-level `env:` using the `runner` context (only
+      # github/inputs/matrix/needs/secrets/strategy/vars are legal there) and
+      # an unknown runner label — either one makes the whole workflow fail to
+      # parse with zero jobs created, which surfaces as "workflow file issue"
+      # and tells you nothing about which line is wrong.
+      actionlint .github/workflows/ci.yml && echo "  ci.yml actionlint OK"
+    else
+      echo "  actionlint not installed — skipped (devenv.local.nix adds it)"
     fi
 
 # run every verification recipe (what the pre-push hook also runs)

@@ -58,18 +58,20 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-24.04      # the spec — this one is the requirement
-          - ubuntu-26.04      # one LTS ahead: the pin must not drift with the base
+          # The spec IS ubuntu-24.04.2, so this is the one that must pass.
+          # (ubuntu-26.04 is listed in GitHub's docs as an available runner but
+          # is not in actionlint's label set — an unknown label makes the whole
+          # workflow fail to parse, so it is not worth the risk here.)
+          - ubuntu-24.04
     env:
-      # Job-level, NOT step-level: the `parallel` group below reads these, and a
-      # step-scoped env is invisible to every step after the one that set it.
-      #
-      # Fork-aware: for a pull_request from a fork, github.repository is the
-      # BASE repo but the PR's head branch only exists in the fork, so cloning
-      # base+branch would 404 for reasons that have nothing to do with the script.
-      IOI_ENV_DIR: ${{ runner.temp }}/ioi-env
-      IOI_ENV_REPO: https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      IOI_ENV_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      # Job-level so the `parallel` group below can see it: a step-scoped env is
+      # invisible to every step after the one that set it.
+      # NOTE: only github/inputs/matrix/needs/secrets/strategy/vars are legal in
+      # a job-level env — `runner.temp` is not one of them, and using it makes
+      # the whole workflow fail to parse with zero jobs created.
+      IOI_ENV_DIR: ${{ github.workspace }}/ioi-env
+      IOI_ENV_REPO: https://github.com/${{ github.repository }}
+      IOI_ENV_BRANCH: ${{ github.ref_name }}
       IOI_ENV_NO_SHELL: "1"   # CI has no TTY; skip the interactive shell
     steps:
       - uses: actions/checkout@v7
@@ -105,6 +107,18 @@ jobs:
       #
       # The group is bounded by the same 10-concurrent-step limit as any
       # background step; five is well inside it.
+      # ── verification ───────────────────────────────────────────────────────
+      # Each of these is a `just` recipe, so the student, this CI job, and the
+      # pre-push hook all execute the same code — that is the point, not speed.
+      #
+      # These are sequential on purpose. GitHub's new step-level `parallel:`
+      # was tried first and removed: it saves roughly 75s in a job that takes
+      # minutes, and it costs the ability to validate the file cleanly —
+      # actionlint 1.7.12 is the latest upstream release and still predates that
+      # keyword, so accepting `parallel:` means either ignoring one of its rules
+      # or losing the context-availability checks that caught a real bug here.
+      # The parallelism that pays is at job level, which this already has: lint,
+      # bootstrap, and oneliner-remote all run concurrently.
       - name: Verify versions and std-guard
         run: |
           cd "$IOI_ENV_DIR"
@@ -124,6 +138,13 @@ jobs:
         run: |
           cd "$IOI_ENV_DIR"
           devenv shell --no-tui -- just check-vimrc
+
+      - name: Verify the vimrc bootstrap actually installed
+        run: |
+          test -f "$HOME/.vimrc" || { echo "  FAIL: ~/.vimrc not installed by bootstrap"; exit 1; }
+          vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc sources cleanly OK"
+          grep -q 'setarch' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc lost the setarch guard"; exit 1; }
+          grep -q 'std=c++17' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc no longer targets C++17"; exit 1; }
 
       - name: Save nix store cache
         if: github.ref == 'refs/heads/main'

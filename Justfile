@@ -21,6 +21,45 @@ bootstrap:
       echo "  installed $HOME/.vimrc — no plugins, F5 = g++ -O2 -std=c++17 -Wall"
     fi
 
+    # ── how much RAM to give WSL ──
+    # Ask the host, never assume. A hard-coded 8GB is fine on a 16GB desktop and
+    # a quiet disaster on a 4GB laptop: WSL takes it, Windows gets nothing, and
+    # the machine thrashes during a compile. Queried through PowerShell's CIM
+    # rather than `wmic`, which is deprecated and may not be present on newer
+    # Windows images. Falls back to a conservative 2GB rather than guessing high.
+    ps=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+    total=""
+    if [ -x "$ps" ]; then
+      total=$("$ps" -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory" 2>/dev/null \
+              | tr -d '\r' | grep -E '^[0-9]+$' | head -1 || true)
+    fi
+
+    if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
+      total_gb=$(( total / 1024 / 1024 / 1024 ))
+      half_gb=$(( total_gb / 2 ))
+      # Half the host, clamped: at most 8GB (nothing here needs more), at least
+      # 2GB (below that g++ starts swapping on a moderately large test).
+      if   [ "$half_gb" -gt 8 ]; then mem_gb=8GB
+      elif [ "$half_gb" -lt 2 ]; then mem_gb=2GB
+      else mem_gb="${half_gb}GB"; fi
+      echo "  host RAM: ${total_gb}GB → WSL memory cap: ${mem_gb} (half, clamped to [2GB, 8GB])"
+    else
+      mem_gb=2GB
+      echo "  could not read host RAM through interop — defaulting to ${mem_gb}"
+      echo "  (merge your own value into .wslconfig if you know better)"
+    fi
+
+    # WSL by default exposes every host core, which is more than a build needs
+    # and more than Windows can spare while it also runs. Cap it.
+    procs=4
+    if [ -x "$ps" ]; then
+      logical=$("$ps" -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors" 2>/dev/null \
+                | tr -d '\r' | grep -E '^[0-9]+$' | head -1 || true)
+      if [ -n "$logical" ] && [ "$logical" -gt 0 ] 2>/dev/null && [ "$logical" -lt 4 ]; then
+        procs=$logical
+      fi
+    fi
+
     echo "── .wslconfig ──"
     win_profile=""
     if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || [ -d /mnt/c/Windows ]; then
@@ -34,15 +73,17 @@ bootstrap:
         echo "  not WSL, or Windows profile not found — nothing to do"
     elif [ -f "$win_profile/.wslconfig" ]; then
         echo "  $win_profile/.wslconfig already exists — leaving it alone"
-        echo "  to get the pinned values, merge in: [wsl2] memory=8GB processors=4 swap=0"
+        echo "  the values this script would have written:"
+        echo "      memory=$mem_gb processors=$procs (see above)"
     else
         # printf, not a heredoc: heredoc bodies inside a just recipe inherit the
         # recipe's indentation and WSL wants a clean INI. Written from Linux so
         # there is no BOM and no CRLF either — either one makes WSL silently
         # ignore the ENTIRE file.
-        printf '[wsl2]\nmemory=8GB\nprocessors=4\nswap=0\nlocalhostForwarding=true\n' \
-            > "$win_profile/.wslconfig"
-        echo "  wrote $win_profile/.wslconfig"
+        printf '[wsl2]\nmemory=%s\nprocessors=%s\nswap=0\nlocalhostForwarding=true\n' \
+            "$mem_gb" "$procs" > "$win_profile/.wslconfig"
+        echo "  wrote $win_profile/.wslconfig (memory=$mem_gb processors=$procs swap=0)"
+        echo "  derived from the host's ${total_gb}GB RAM — see the note above"
         echo "  takes effect after: wsl --shutdown  (run from cmd, then reopen)"
     fi
 

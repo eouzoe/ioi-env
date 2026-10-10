@@ -120,7 +120,6 @@ check-env:
     chk g++  "$(g++ -dumpversion 2>/dev/null || echo missing)" "13.3"
     chk vim  "$(vim --version 2>/dev/null | head -1 | awk '{print $5}' || echo missing)" "9.1"
     chk make "$(make --version 2>/dev/null | head -1 | awk '{print $3}' || echo missing)" "4"
-
     for c in gdb python3 diff timeout; do
       if command -v "$c" >/dev/null 2>&1; then
         printf '  %-10s ok\n' "$c"
@@ -128,11 +127,13 @@ check-env:
         printf '  %-10s MISSING\n' "$c"; fail=1
       fi
     done
+    # `time` is deliberately NOT in that list. /usr/bin/time lives in the nix
+    # `time` package, but `command -v time` also finds bash's builtin, so the
+    # check would pass on a machine where the real binary is missing — a check
+    # that cannot fail is worse than no check. check-compile uses it by absolute
+    # path instead.
 
-    # The real guard. <print> is C++23: the judge's gcc 13.3 rejects it, so must
-    # ours. If this ever compiles, the compiler pin silently drifted and every
-    # student is now practising code the judge will not accept.
-    t=$(mktemp -d)
+    t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
     printf '#include <print>\nint main(){ std::println("x"); }\n' > "$t/cpp23.cpp"
     if g++ -O2 -std=c++17 "$t/cpp23.cpp" -o "$t/cpp23" 2>/dev/null; then
       printf '  %-10s FAIL — <print> compiled: pin drifted to C++23\n' "std-guard"
@@ -140,7 +141,6 @@ check-env:
     else
       printf '  %-10s ok (C++23 rejected, as the judge does)\n' "std-guard"
     fi
-    rm -rf "$t"
 
     if [ "$fail" = 0 ]; then echo "  all good"; else echo "  ENV DRIFTED — re-check devenv.yaml / devenv.nix"; exit 1; fi
 
@@ -207,14 +207,16 @@ check-vimrc:
     grep -q 'std=c++17' deploy/vimrc || { echo "  FAIL: vimrc no longer targets C++17"; exit 1; }
     grep -q 'setarch' deploy/vimrc || { echo "  FAIL: vimrc dropped the setarch -R guard"; exit 1; }
 
-# static lint of the shell script and the workflow (skips cleanly if absent)
+# static lint of the shell scripts and the workflow (skips cleanly if absent)
 lint:
     #!/usr/bin/env bash
     set -uo pipefail
     if command -v shellcheck >/dev/null 2>&1; then
       # -s sh: POSIX sh, not bash. The script runs under dash on Ubuntu, so
       # bash-only constructs would pass here and die on a student's machine.
-      shellcheck -s sh scripts/start.sh && echo "  start.sh lint OK"
+      # Both scripts, not just start.sh — ci-wsl-env.sh is shell code too and
+      # used to go unchecked.
+      shellcheck -s sh scripts/start.sh scripts/ci-wsl-env.sh && echo "  shell scripts lint OK"
     else
       echo "  shellcheck not installed — skipped (devenv.local.nix adds it)"
     fi
@@ -253,7 +255,7 @@ hooks:
     set -euo pipefail
     if [ ! -f devenv.local.nix ]; then
       cp devenv.local.nix.example devenv.local.nix
-      echo "  created devenv.local.nix (lefthook + shellcheck + yamllint)"
+      echo "  created devenv.local.nix (lefthook + shellcheck + actionlint + yamllint)"
     fi
     devenv shell --no-tui -- lefthook install
 

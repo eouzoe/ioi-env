@@ -98,6 +98,20 @@ jobs:
           # `wsl.exe --install <distro> --web-download --no-launch`, so there is
           # no interactive "create a UNIX username" prompt to get stuck on —
           # which is what made the hand-rolled approach unusable in CI.
+          #
+          # Known-benign noise: its first step runs `winget install WSL` with
+          # continue-on-error, because WSL is usually already present on the
+          # runner image. winget then exits 1 and the action logs it as
+          # "##[error]Process completed with exit code 1" while still marking
+          # the step a success. Ignore that annotation; the distro install in
+          # the next step is the one that has to succeed, and it reports
+          # "Distribution successfully installed" / "Created a new distro with
+          # user: root".
+          #
+          # Note the user is root: the runner's WSL image has no OOBE user.
+          # Nothing here depends on being non-root — the only sudo-requiring
+          # steps start.sh performs are printed, not executed — so this matches
+          # the student path closely enough to be worth trusting.
           distro: Ubuntu-${{ matrix.ubuntu }}
 
       - name: Assert the distro is the competition spec

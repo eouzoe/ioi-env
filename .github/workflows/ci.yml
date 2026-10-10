@@ -41,8 +41,9 @@ jobs:
           sudo apt-get install -y vim
           vim -Nu deploy/vimrc -n -es -c 'qa!' && echo "  deploy/vimrc OK"
 
-      - name: devenv.nix parses
-        run: nix-instantiate --parse devenv.nix >/dev/null && echo "  devenv.nix OK"
+      # NOTE: no `devenv.nix parses` step here on purpose. It would need Nix,
+      # which this job deliberately does not install, and it is redundant: the
+      # bootstrap job evaluates devenv.nix for real by building the whole shell.
 
   # ── the real test ─────────────────────────────────────────────────────────
   # Runs the actual bootstrap script on a clean runner: no Nix, no devenv, no
@@ -83,7 +84,7 @@ jobs:
         uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
-          restore-prefixes-fallback: nix-${{ matrix.os }}-
+          restore-prefixes-all-matches: nix-${{ matrix.os }}-
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31

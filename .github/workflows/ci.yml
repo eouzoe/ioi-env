@@ -85,13 +85,28 @@ jobs:
             set -eu
             echo "── distro identity ──"
             lsb_release -ds
-            # The spec says Ubuntu 24.04.2. Pin the minor, not just the major:
-            # a 24.04.3+ would carry a different gcc patch and quietly drift.
-            version="$(lsb_release -rs)"
-            echo "  version: $version"
-            case "$version" in
-              24.04.*) echo "  24.04 series OK" ;;
-              *) echo "  FAIL: expected 24.04.x, got $version"; exit 1 ;;
+            # `lsb_release -rs` gives the SERIES only ("24.04"), never the point
+            # release, so it cannot be used to check for 24.04.2 specifically.
+            # The point release lives in /etc/os-release's VERSION.
+            series="$(lsb_release -rs)"
+            point="$(. /etc/os-release && echo "$VERSION")"
+            echo "  series: $series   point release: $point"
+
+            case "$series" in
+              24.04) echo "  24.04 series OK" ;;
+              *) echo "  FAIL: expected the 24.04 series, got $series"; exit 1 ;;
+            esac
+
+            # Note the discrepancy rather than assert it away: the competition
+            # spec names Ubuntu 24.04.2, but the WSL store's Ubuntu-24.04 image
+            # is currently 24.04.5. Point releases within a series share the
+            # same package set and the same apt gcc, and in any case the
+            # compiler here comes from the nixpkgs pin in devenv.yaml, not from
+            # apt — so this is recorded for visibility, not enforced. If it ever
+            # starts to matter, it is the pin that has to move, not this check.
+            case "$point" in
+              *24.04.2*) echo "  point release matches the spec exactly" ;;
+              *) echo "  note: store image is $point, spec names 24.04.2 (nix-pinned compiler, so no drift)" ;;
             esac
 
       - name: Restore nix store cache

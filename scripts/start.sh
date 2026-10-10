@@ -166,7 +166,7 @@ head1 "entering devenv shell"
 # can actually be opened — /dev/tty exists on most WSL boxes but is unopenable
 # without a controlling terminal (pipe, cron, CI), and a failed `exec` would
 # take the whole script down with a nonzero exit that reads as "install failed".
-if [ -e /dev/tty ] && : < /dev/tty 2>/dev/null; then
+if [ -e /dev/tty ] && : 2>/dev/null < /dev/tty; then
   exec devenv shell < /dev/tty
 else
   log "no usable terminal — enter the shell with:"

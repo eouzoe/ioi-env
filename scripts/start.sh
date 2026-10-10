@@ -248,10 +248,13 @@ log ""
 
 # `curl | bash` leaves stdin on the script pipe, which is already at EOF by the
 # time we get here, so an interactive shell would exit instantly. Attach the
-# real terminal when one exists; otherwise tell the user how to get in.
-if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+# real terminal only when it can actually be opened — /dev/tty exists on most
+# WSL boxes but is unopenable without a controlling terminal (e.g. inside a
+# pipe, cron, or CI), and a failed `exec` would take the whole script down with
+# a nonzero exit that reads as "the install failed".
+if [ -e /dev/tty ] && : < /dev/tty 2>/dev/null; then
   exec devenv shell < /dev/tty
 else
-  log "no controlling terminal — run this to enter the shell:"
+  log "no usable terminal — enter the shell with:"
   log "    cd $DEST && devenv shell"
 fi

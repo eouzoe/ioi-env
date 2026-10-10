@@ -97,7 +97,10 @@ jobs:
         run: |
           cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
           devenv allow
-          devenv tasks run ioi-env:verify
+          # `just check-env` is the single source of truth: it carries the
+          # version pins, the missing-tool sweep, and the std-guard that fails
+          # if <print> ever compiles. CI runs the same recipe a student runs.
+          devenv shell --no-tui -- just check-env
 
       - name: Compile, run, and reject the wrong standard
         run: |

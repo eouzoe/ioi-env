@@ -28,6 +28,7 @@ in
   # 走名字 `g++` 就會靜默用錯版本。
   env.GCC_BIN = "${gcc13}/bin/g++";
 
+  # C 語言支援；C++ 由 gcc13 提供，不需要額外 language 模組。
   languages.c.enable = true;
 
   enterShell = ''
@@ -38,40 +39,6 @@ in
     echo "  vim work/sol.cpp     寫題"
     echo "  F5                   編譯執行 (g++ -O2 -std=c++17 -Wall)"
     echo "  just check-env       檢查環境有沒有漂"
-    echo "  cd ~/algo-tutor      回到家教專案（若已安裝）"
     echo ""
-  '';
-
-  # 讓 `just check-env` 和 CI 跑同一份檢查：單一事實來源，不會兩邊各寫一份然後漂掉。
-  tasks."ioi-env:verify" = {
-    exec = ''
-      set -u
-      fail=0
-      chk() { # name actual prefix
-        if printf '%s' "$2" | grep -q "^$3"; then
-          printf '  %-10s %-16s ok\n' "$1" "$2"
-        else
-          printf '  %-10s %-16s WRONG (want %s*)\n' "$1" "$2" "$3"
-          fail=1
-        fi
-      }
-
-      echo "ioi-env competition alignment"
-      chk g++  "$(g++ -dumpversion 2>/dev/null || echo missing)" "13"
-      chk vim  "$(vim --version 2>/dev/null | head -1 | awk '{print $5}' || echo missing)" "9"
-      chk make "$(make --version 2>/dev/null | head -1 | awk '{print $3}' || echo missing)" "4"
-      command -v gdb    >/dev/null && echo "  gdb       ok"               || { echo "  gdb       MISSING"; fail=1; }
-      command -v python3 >/dev/null && echo "  python3   ok"               || { echo "  python3   MISSING"; fail=1; }
-      command -v diff   >/dev/null && echo "  diff      ok"               || { echo "  diff      MISSING"; fail=1; }
-      command -v timeout >/dev/null && echo "  timeout   ok"              || { echo "  timeout   MISSING"; fail=1; }
-      command -v time   >/dev/null && echo "  time      ok ($(readlink -f "$(command -v time)"))" || { echo "  time      MISSING"; fail=1; }
-
-      if [ "$fail" = 0 ]; then echo "  all good"; exit 0; else echo "  ENV DRIFTED — re-check devenv.nix"; exit 1; fi
-    '';
-    before = [ "devenv:enterShell" ];
-  };
-
-  enterTest = ''
-    devenv tasks run ioi-env:verify
   '';
 }

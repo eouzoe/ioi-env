@@ -41,6 +41,29 @@ jobs:
           sudo apt-get install -y vim
           vim -Nu deploy/vimrc -n -es -c 'qa!' && echo "  deploy/vimrc OK"
 
+      # actionlint is the one check here that carries the real GitHub Actions
+      # schema plus expression/context validation, and it has already caught
+      # three bugs that plain YAML parsing cannot see (hashFiles() in a
+      # job-level env, a job name containing ": ", and a step mixing run: with
+      # parallel:). It is deliberately in the fast job, not the slow one, so a
+      # workflow mistake costs seconds instead of minutes.
+      #
+      # Uses actionlint's own download script rather than apt (not packaged) or
+      # Nix (this job stays Nix-free on purpose). Pinned to an explicit version
+      # so a new upstream release cannot change verdicts under us.
+      - name: Install actionlint
+        id: get_actionlint
+        run: bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+        shell: bash
+
+      - name: Lint the workflow files
+        run: |
+          # The matcher turns actionlint's output into clickable annotations on
+          # the PR diff instead of a wall of text in the log.
+          echo "::add-matcher::.github/actionlint-matcher.json"
+          "${{ steps.get_actionlint.outputs.executable }}" -color
+        shell: bash
+
   # ── the faithful reproduction of the student's actual path ────────────────
   # This is the job that matters. It starts from a completely blank Windows
   # runner, installs WSL, installs the specific Ubuntu version the competition
@@ -143,13 +166,6 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            # each wsl-bash step is a fresh non-login shell: nothing a previous
-            # step exported is still set, so source the nix profile explicitly.
-            for p in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
-                     /nix/var/nix/profiles/default/etc/profile.d/nix.sh; do
-              [ -e "$p" ] && . "$p"
-            done
-            command -v devenv >/dev/null || { echo '  FAIL: devenv not on PATH after sourcing nix profile'; exit 1; }
             fail=0
 
             echo "── IS_WSL branch was taken ──"
@@ -173,14 +189,17 @@ jobs:
               echo "  FAIL: $cfg not written — Windows interop broke"; fail=1
             fi
 
-            echo "── no TTY was handled gracefully ──"
-            # start.sh must not die when /dev/tty cannot be opened; it should
-            # print how to enter the shell instead. Re-run just the tail to
-            # confirm the exit code is 0 rather than the exec failure it had.
+            echo "── idempotent, and no TTY handled gracefully ──"
+            # Two things at once. The exit code proves start.sh does not die when
+            # /dev/tty cannot be opened (it used to exec it unconditionally and
+            # exit non-zero, which reads as "the install failed"). Running it a
+            # SECOND time proves the whole path is idempotent: vimrc already
+            # installed, .wslconfig already present, repo already cloned — none of
+            # which may be an error.
             if IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1; then
-              echo "  exits 0 without a TTY OK"
+              echo "  second run exits 0 with no TTY OK"
             else
-              echo "  FAIL: start.sh exits non-zero with no TTY"; fail=1
+              echo "  FAIL: start.sh is not idempotent, or exits non-zero with no TTY"; fail=1
             fi
 
             [ "$fail" = 0 ] || exit 1
@@ -192,13 +211,7 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            # each wsl-bash step is a fresh non-login shell: nothing a previous
-            # step exported is still set, so source the nix profile explicitly.
-            for p in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
-                     /nix/var/nix/profiles/default/etc/profile.d/nix.sh; do
-              [ -e "$p" ] && . "$p"
-            done
-            command -v devenv >/dev/null || { echo '  FAIL: devenv not on PATH after sourcing nix profile'; exit 1; }
+            . ~/ioi-env/scripts/ci-wsl-env.sh
             devenv shell --no-tui -- just check-env
             devenv shell --no-tui -- just check-compile
             devenv shell --no-tui -- just check-vimrc
@@ -210,13 +223,7 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            # each wsl-bash step is a fresh non-login shell: nothing a previous
-            # step exported is still set, so source the nix profile explicitly.
-            for p in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
-                     /nix/var/nix/profiles/default/etc/profile.d/nix.sh; do
-              [ -e "$p" ] && . "$p"
-            done
-            command -v devenv >/dev/null || { echo '  FAIL: devenv not on PATH after sourcing nix profile'; exit 1; }
+            . ~/ioi-env/scripts/ci-wsl-env.sh
             # Ran as its own step rather than folded into the verify step above,
             # because WSL2 is a different kernel with a different ASLR situation
             # from a native Linux runner, and this is the run that proves

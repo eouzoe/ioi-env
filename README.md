@@ -31,12 +31,13 @@ teach code the judge rejects.
 ## Layout
 
 ```
-scripts/start.sh   bootstrap: Nix + devenv + fetch this repo, then hands to `just`
-Justfile           all setup and verification recipes
-deploy/vimrc       contest-grade vimrc → installed to ~/.vimrc
-devenv.nix         pinned toolchain
-devenv.yaml        nixpkgs 25.05 pin, shell: bash
-lefthook.yml       pre-push checks (git)
+scripts/start.sh       bootstrap: Nix + devenv + fetch this repo, then hands to `just`
+Justfile               all setup and verification recipes
+deploy/vimrc           contest-grade vimrc → installed to ~/.vimrc
+devenv.nix             pinned toolchain
+devenv.yaml            nixpkgs 25.05 pin, shell: bash
+lefthook.yml           pre-push checks (git)
+scripts/ci-wsl-env.sh  CI-only: puts devenv on PATH inside a fresh WSL step
 .github/workflows/ci.yml
 ```
 
@@ -65,7 +66,7 @@ SEGVs). `just check-asan` runs it 20 times and fails if it is not stable.
 Not for students — they never push.
 
 ```bash
-cp devenv.local.nix.example devenv.local.nix   # lefthook, shellcheck, yamllint
+cp devenv.local.nix.example devenv.local.nix   # lefthook, shellcheck, actionlint, yamllint
 just hooks                                     # install the git hooks
 just jj-setup                                  # make `jj push` run them first
 ```
@@ -73,3 +74,20 @@ just jj-setup                                  # make `jj push` run them first
 `lefthook.yml` runs the same `just` recipes CI does. `jj git push` does not run
 git hooks, so `just jj-setup` adds a jj alias that runs the checks and then
 pushes; without it, a jj push skips validation entirely.
+
+## CI
+
+Three jobs, all green:
+
+| Job | What it proves |
+|---|---|
+| `lint` | shellcheck + vimrc parse + **actionlint** — the fast one, and the one that catches workflow mistakes before the slow jobs run |
+| `wsl` | blank Windows → install WSL → install Ubuntu 24.04 → run the student's command **inside WSL** |
+| `oneliner-remote` | the literal `curl \| bash` from the README, against published `main` |
+
+The `wsl` job is the one that matters, because it is the only place the
+WSL-only code is exercised: the `IS_WSL` branch, the `/mnt/c` + `cmd.exe`
+interop that locates the Windows profile, the `.wslconfig` write to the Windows
+filesystem, and the no-TTY fallback when `/dev/tty` cannot be opened. It also
+runs `start.sh` a second time, which is what proves the whole path is
+idempotent.

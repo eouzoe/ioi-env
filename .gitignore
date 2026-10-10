@@ -8,7 +8,7 @@ result-*
 a.out
 /tmp_a
 
-# maintainer-only tooling (shellcheck, yamllint) — never shipped to students
+# maintainer-only tooling (shellcheck, actionlint, yamllint) — never shipped to students
 devenv.local.nix
 
 .DS_Store

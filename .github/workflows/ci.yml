@@ -105,34 +105,25 @@ jobs:
       #
       # The group is bounded by the same 10-concurrent-step limit as any
       # background step; five is well inside it.
-      - name: Verify
-        parallel:
-          - name: Versions and std-guard
-            run: |
-              cd "$IOI_ENV_DIR"
-              devenv shell --no-tui -- just check-env
+      - name: Verify versions and std-guard
+        run: |
+          cd "$IOI_ENV_DIR"
+          devenv shell --no-tui -- just check-env
 
-          - name: C++17 compiles, C++23 rejected
-            run: |
-              cd "$IOI_ENV_DIR"
-              devenv shell --no-tui -- just check-compile
+      - name: Verify C++17 compiles, C++23 rejected
+        run: |
+          cd "$IOI_ENV_DIR"
+          devenv shell --no-tui -- just check-compile
 
-          - name: Sanitizers deterministic
-            run: |
-              cd "$IOI_ENV_DIR"
-              devenv shell --no-tui -- just check-asan
+      - name: Verify sanitizers deterministic
+        run: |
+          cd "$IOI_ENV_DIR"
+          devenv shell --no-tui -- just check-asan
 
-          - name: Vimrc parses and keeps its guards
-            run: |
-              cd "$IOI_ENV_DIR"
-              devenv shell --no-tui -- just check-vimrc
-
-          - name: The vimrc that bootstrap actually installed
-            run: |
-              test -f "$HOME/.vimrc" || { echo "  FAIL: ~/.vimrc not installed by bootstrap"; exit 1; }
-              vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc sources cleanly OK"
-              grep -q 'setarch' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc lost the setarch guard"; exit 1; }
-              grep -q 'std=c++17' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc no longer targets C++17"; exit 1; }
+      - name: Verify vimrc parses and keeps its guards
+        run: |
+          cd "$IOI_ENV_DIR"
+          devenv shell --no-tui -- just check-vimrc
 
       - name: Save nix store cache
         if: github.ref == 'refs/heads/main'

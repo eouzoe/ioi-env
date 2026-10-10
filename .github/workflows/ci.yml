@@ -143,6 +143,13 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
+            # each wsl-bash step is a fresh non-login shell: nothing a previous
+            # step exported is still set, so source the nix profile explicitly.
+            for p in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
+                     /nix/var/nix/profiles/default/etc/profile.d/nix.sh; do
+              [ -e "$p" ] && . "$p"
+            done
+            command -v devenv >/dev/null || { echo '  FAIL: devenv not on PATH after sourcing nix profile'; exit 1; }
             fail=0
 
             echo "── IS_WSL branch was taken ──"
@@ -185,6 +192,13 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
+            # each wsl-bash step is a fresh non-login shell: nothing a previous
+            # step exported is still set, so source the nix profile explicitly.
+            for p in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
+                     /nix/var/nix/profiles/default/etc/profile.d/nix.sh; do
+              [ -e "$p" ] && . "$p"
+            done
+            command -v devenv >/dev/null || { echo '  FAIL: devenv not on PATH after sourcing nix profile'; exit 1; }
             devenv shell --no-tui -- just check-env
             devenv shell --no-tui -- just check-compile
             devenv shell --no-tui -- just check-vimrc
@@ -196,6 +210,13 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
+            # each wsl-bash step is a fresh non-login shell: nothing a previous
+            # step exported is still set, so source the nix profile explicitly.
+            for p in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
+                     /nix/var/nix/profiles/default/etc/profile.d/nix.sh; do
+              [ -e "$p" ] && . "$p"
+            done
+            command -v devenv >/dev/null || { echo '  FAIL: devenv not on PATH after sourcing nix profile'; exit 1; }
             # Ran as its own step rather than folded into the verify step above,
             # because WSL2 is a different kernel with a different ASLR situation
             # from a native Linux runner, and this is the run that proves

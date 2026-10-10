@@ -116,7 +116,8 @@ check-env:
     }
 
     echo "ioi-env — competition alignment"
-    echo "  spec: Ubuntu 24.04.2 · gcc/g++ 13.3.0 · C++17 · vim 9.1"
+    echo "  compiler: gcc/g++ 13.3.0 · C++17 · vim 9.1  (nixpkgs 25.05 pin)"
+    echo "  OS is whatever 'wsl --install -d Ubuntu-24.04' gives — see README"
     chk g++  "$(g++ -dumpversion 2>/dev/null || echo missing)" "13.3"
     chk vim  "$(vim --version 2>/dev/null | head -1 | awk '{print $5}' || echo missing)" "9.1"
     chk make "$(make --version 2>/dev/null | head -1 | awk '{print $3}' || echo missing)" "4"

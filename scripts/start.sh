@@ -1,8 +1,11 @@
 #!/usr/bin/env sh
 # ioi-env — student one-command bootstrap.
 #
-# Targets the competition environment (Ubuntu 24.04.2 + gcc/g++ 13.3.0 + C++17
-# + vim 9.1) and works on any Linux, including WSL Ubuntu.
+# Pins the compiler and editor to the competition spec (gcc/g++ 13.3.0,
+# C++17, vim 9.1) via nixpkgs, and works on any Linux, including WSL Ubuntu.
+# The OS point release is deliberately not chased — see the README section
+# "About the OS version": `wsl --install -d Ubuntu-24.04` has no version
+# selector and the judge's gcc is what actually has to match.
 #
 # Usage (the one line a student runs):
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/ioi-env/main/scripts/start.sh | bash
@@ -39,9 +42,9 @@ command -v curl >/dev/null 2>&1 || die "curl is required (WSL Ubuntu ships it; e
 command -v tar  >/dev/null 2>&1 || die "tar is required (WSL Ubuntu ships it)"
 
 printf '\n  ioi-env — one command to start.\n'
-printf '  target: Ubuntu 24.04.2 + gcc/g++ 13.3.0 + C++17 + vim 9.1\n'
-# shellcheck disable=SC2016  # literal backticks, not command substitution
-printf '          (the competition spec; everything else is delegated to just)\n\n'
+printf '  OS:       Ubuntu 24.04  (wsl --install -d Ubuntu-24.04; point release follows the Store)\n'
+printf '  compiler: gcc/g++ 13.3.0 · C++17   ← pinned by nixpkgs, this is what the judge uses\n'
+printf '  editor:   vim 9.1                   ← pinned likewise\n\n'
 
 # ── 1. Nix ──────────────────────────────────────────────────────────────────
 

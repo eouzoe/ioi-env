@@ -15,18 +15,46 @@ Pinned to the competition spec (臺北市 115 學年度資訊學科能力競賽�
 
 | | Spec | Here |
 |---|---|---|
-| OS | Ubuntu 24.04.2 | WSL Ubuntu 24.04 |
 | Compiler | gcc/g++ **13.3.0** | `gcc13` = 13.3.0 |
 | Language | C++17 | `-std=c++17` |
 | Editor | vim **9.1** | `vim` = 9.1.1336 |
 
-The pin is exact, not approximate — nixpkgs 25.05 happens to ship exactly
-those versions (rolling gives 13.4.0 / vim 9.2, and 25.11 already moved gcc13).
-`devenv.yaml` names the release so the choice is deliberate and reviewable.
+The compiler and editor pins are **exact**, not approximate — nixpkgs 25.05
+happens to ship exactly those versions (rolling gives 13.4.0 / vim 9.2, and
+25.11 already moved gcc13). `devenv.yaml` names the release so the choice is
+deliberate and reviewable.
 
 `just check-env` fails loudly if any of it drifts, including a guard that
 `<print>` (C++23) must **not** compile — the one drift that would silently
 teach code the judge rejects.
+
+### About the OS version — what the spec says vs. what you will get
+
+The spec names **Ubuntu 24.04.2**. A student who runs
+`wsl --install -d Ubuntu-24.04` gets whatever Canonical last published to the
+Store, which today is 24.04**.5** — not .2.
+
+That is not a shortcoming of this setup, it is not avoidable:
+
+- The Store's `Ubuntu-24.04` appx has no version selector. There is no
+  `wsl --install -d Ubuntu-24.04.2`.
+- `cloud-images.ubuntu.com/wsl/releases/noble/` publishes exactly two images
+  per series: the original dated build (`20240423/`, i.e. 24.04.**0**) and
+  `current/`. There is no .2 snapshot.
+- Canonical's own `release-info` tooling (used by their `download-rootfs`
+  GitHub action) has `--rootfs <arch>` and no version flag either, so the
+  official path cannot pin a point release.
+
+**And it does not matter.** The judge compiles with *its* gcc 13.3.0. What has
+to match is the compiler, and the compiler here comes from the nixpkgs pin —
+not from apt, not from the distro. Same for vim. Point releases within a series
+carry the same kernel ABI and the same package set for anything this
+environment uses, so the only thing that would change by chasing 24.04.2 is the
+`lsb_release` string.
+
+So: install with `wsl --install -d Ubuntu-24.04`, accept whatever point
+release it gives, and let `just check-env` guard the versions that actually
+affect submissions.
 
 ## Layout
 

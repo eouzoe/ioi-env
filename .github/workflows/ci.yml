@@ -85,9 +85,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 24.04 is the competition spec (Ubuntu 24.04.2). Testing a second
-        # version here would only prove the distro installs, not that the
-        # toolchain matches, so there is deliberately only one.
+        # 24.04 is the competition spec series. Testing a second version would
+        # only prove the distro installs, not that the toolchain matches, so
+        # there is deliberately only one.
         ubuntu:
           - '24.04'
     steps:
@@ -134,16 +134,23 @@ jobs:
               *) echo "  FAIL: expected the 24.04 series, got $series"; exit 1 ;;
             esac
 
-            # Note the discrepancy rather than assert it away: the competition
-            # spec names Ubuntu 24.04.2, but the WSL store's Ubuntu-24.04 image
-            # is currently 24.04.5. Point releases within a series share the
-            # same package set and the same apt gcc, and in any case the
-            # compiler here comes from the nixpkgs pin in devenv.yaml, not from
-            # apt — so this is recorded for visibility, not enforced. If it ever
-            # starts to matter, it is the pin that has to move, not this check.
+            # Note the discrepancy rather than assert it away, and do not try to
+            # chase it: `wsl --install -d Ubuntu-24.04` is the student's command
+            # and it has no version selector — it installs whatever Canonical
+            # last put in the Store. Right now that is 24.04.5, not the 24.04.2
+            # the spec names, and there is no image to import instead:
+            # cloud-images.ubuntu.com/wsl/releases/noble/ publishes only
+            # 20240423/ (= 24.04.0) and current/, and Canonical's own
+            # release-info tooling has no version flag.
+            #
+            # The series is asserted because that is what is enforceable. The
+            # point release is not, and does not need to be: the judge compiles
+            # with its own gcc 13.3.0, and ours comes from the nixpkgs pin
+            # rather than apt. If this ever starts to matter, the pin is what
+            # has to move, not this check.
             case "$point" in
               *24.04.2*) echo "  point release matches the spec exactly" ;;
-              *) echo "  note: store image is $point, spec names 24.04.2 (nix-pinned compiler, so no drift)" ;;
+              *) echo "  note: store image is $point, spec names 24.04.2 — not installable, and irrelevant (compiler is nix-pinned)" ;;
             esac
 
       # NOTE: no nix-store caching here. cache-nix-action documents that it

@@ -77,6 +77,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
       # devenv.lock is the input pin; hashing it means a cache hit for every
       # commit that doesn't touch the pin, and automatic invalidation when one
       # does. Without this the nix store is cold on every run.
@@ -86,28 +93,12 @@ jobs:
           primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
           restore-prefixes-all-matches: nix-${{ matrix.os }}-
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
-
       - name: Run the bootstrap script
         run: bash scripts/start.sh
 
       - name: Trust the fetched project
         run: cd "$IOI_ENV_DIR" && devenv allow
 
-      # ── parallel verification ─────────────────────────────────────────────
-      # Each of these is a `just` recipe, so the student, this CI job, and the
-      # pre-push hook all execute the same code. They used to run one after
-      # another inside a single shell; `parallel` runs them as concurrent
-      # background steps and keeps each one's log separate instead of
-      # interleaving them the way `&` in a shell would.
-      #
-      # The group is bounded by the same 10-concurrent-step limit as any
-      # background step; five is well inside it.
       # ── verification ───────────────────────────────────────────────────────
       # Each of these is a `just` recipe, so the student, this CI job, and the
       # pre-push hook all execute the same code — that is the point, not speed.

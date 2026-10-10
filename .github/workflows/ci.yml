@@ -5,8 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: nothing here writes to the repo or posts comments, so the
+# default broad token scope is unnecessary.
+permissions:
+  contents: read
+
 # A new push to the same branch supersedes the in-flight run instead of queueing
-# behind it. Purely latency; without it a push-during-CI waits.
+# behind it. Pure latency; without it a push-during-CI waits.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,10 +19,11 @@ concurrency:
 jobs:
   # ── static gates ──────────────────────────────────────────────────────────
   # No nix, no devenv, no multi-minute build. Runs while the bootstrap job is
-  # still downloading its toolchain, so a typo fails in seconds rather than
+  # still downloading its toolchain, so a typo fails in seconds instead of
   # after the expensive job finishes.
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -43,16 +49,28 @@ jobs:
   # git config — exactly the state of a student's fresh WSL Ubuntu. ubuntu-24.04
   # is not incidental, it IS the spec: the contest environment is Ubuntu 24.04.2,
   # and this job exists to prove the one-liner works on a brand-new copy of it.
+  # The second OS is there to prove the pin survives a newer base image.
   bootstrap:
-    name: bootstrap on a clean ${{ matrix.runner }}
-    runs-on: ${{ matrix.runner }}
+    name: bootstrap on a clean ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
-        runner:
-          - ubuntu-24.04      # the spec. this one is the requirement.
-          - ubuntu-26.04      # one LTS ahead: proves the pin survives a newer base
+        os:
+          - ubuntu-24.04      # the spec — this one is the requirement
+          - ubuntu-26.04      # one LTS ahead: the pin must not drift with the base
+    env:
+      # Job-level, NOT step-level: the `parallel` group below reads these, and a
+      # step-scoped env is invisible to every step after the one that set it.
+      #
+      # Fork-aware: for a pull_request from a fork, github.repository is the
+      # BASE repo but the PR's head branch only exists in the fork, so cloning
+      # base+branch would 404 for reasons that have nothing to do with the script.
+      IOI_ENV_DIR: ${{ runner.temp }}/ioi-env
+      IOI_ENV_REPO: https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      IOI_ENV_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      IOI_ENV_NO_SHELL: "1"   # CI has no TTY; skip the interactive shell
     steps:
       - uses: actions/checkout@v7
 
@@ -62,9 +80,8 @@ jobs:
       - name: Restore nix store cache
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.runner }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
-          restore-prefixes-fallback: nix-${{ matrix.runner }}-
-          restore-key-if-no-exact-match: nix-${{ matrix.runner }}-
+          primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
+          restore-prefixes-fallback: nix-${{ matrix.os }}-
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
@@ -74,67 +91,66 @@ jobs:
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
       - name: Run the bootstrap script
-        env:
-          IOI_ENV_NO_SHELL: "1"   # CI has no TTY; skip the interactive shell
-          IOI_ENV_DIR: ${{ github.workspace }}/ioi-env
-          IOI_ENV_REPO: https://github.com/${{ github.repository }}
-          IOI_ENV_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: bash scripts/start.sh
+
+      - name: Trust the fetched project
+        run: cd "$IOI_ENV_DIR" && devenv allow
 
       # ── parallel verification ─────────────────────────────────────────────
       # Each of these is a `just` recipe, so the student, this CI job, and the
       # pre-push hook all execute the same code. They used to run one after
-      # another; `parallel` runs them as concurrent background steps with an
-      # implicit wait at the end of the group, and keeps each one's log
-      # separate instead of interleaving them the way `&` in a shell would.
+      # another inside a single shell; `parallel` runs them as concurrent
+      # background steps and keeps each one's log separate instead of
+      # interleaving them the way `&` in a shell would.
       #
       # The group is bounded by the same 10-concurrent-step limit as any
       # background step; five is well inside it.
       - name: Verify
-        run: cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}" && devenv allow
         parallel:
           - name: Versions and std-guard
             run: |
-              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              cd "$IOI_ENV_DIR"
               devenv shell --no-tui -- just check-env
 
           - name: C++17 compiles, C++23 rejected
             run: |
-              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              cd "$IOI_ENV_DIR"
               devenv shell --no-tui -- just check-compile
 
           - name: Sanitizers deterministic
             run: |
-              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              cd "$IOI_ENV_DIR"
               devenv shell --no-tui -- just check-asan
 
           - name: Vimrc parses and keeps its guards
             run: |
-              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              cd "$IOI_ENV_DIR"
               devenv shell --no-tui -- just check-vimrc
 
-          - name: The vimrc that actually got installed
+          - name: The vimrc that bootstrap actually installed
             run: |
               test -f "$HOME/.vimrc" || { echo "  FAIL: ~/.vimrc not installed by bootstrap"; exit 1; }
               vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc sources cleanly OK"
               grep -q 'setarch' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc lost the setarch guard"; exit 1; }
+              grep -q 'std=c++17' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc no longer targets C++17"; exit 1; }
 
       - name: Save nix store cache
+        if: github.ref == 'refs/heads/main'
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.runner }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
 
   # ── the literal one-liner, straight off GitHub ──────────────────────────────
-  # The job above points IOI_ENV_DIR at the workspace; this one runs the exact
-  # curl command from the README against the published branch, to prove the URL
-  # in the docs really is a working one-liner. Only meaningful on main, where
-  # that branch is the one being pushed — a PR's head ref doesn't exist on the
-  # base repo, so a clone from there would 404 for reasons unrelated to the
-  # script.
+  # The job above sets IOI_ENV_DIR to a temp path; this one runs the exact curl
+  # command from the README, against the published branch, to prove the URL in
+  # the docs really is a working one-liner and that a default install lands in
+  # ~/ioi-env as documented. Only meaningful on main, where that branch is the
+  # one being pushed — a PR's head ref doesn't exist on the base repo, so the
+  # published-main URL would 404 for reasons unrelated to the script.
   oneliner-remote:
     name: one-liner (curl | bash) from published main
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Run the README one-liner verbatim
@@ -143,8 +159,9 @@ jobs:
         run: |
           curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/start.sh" | bash
 
-      - name: It produced a working toolchain
+      - name: It landed in ~/ioi-env with a working toolchain
         run: |
+          test -f "$HOME/ioi-env/devenv.nix" || { echo "  FAIL: did not install to ~/ioi-env"; exit 1; }
           cd "$HOME/ioi-env"
           devenv allow
           devenv shell --no-tui -- just check-env

@@ -1,0 +1,37 @@
+# ioi-env — git hooks
+# Powered by lefthook: https://github.com/evilmartians/lefthook
+#
+# Install once (maintainer only; students never push):
+#   lefthook install
+#
+# These are the SAME `just` recipes CI runs, so local and remote validation
+# cannot drift apart. A hook is the right place for this because the version
+# pins are the entire product: a push that silently moves gcc13 off 13.3.0, or
+# drops the setarch -R guard from the vimrc, ships a toolchain that no longer
+# matches the competition spec — and nobody finds out until a student's code
+# fails to compile at the venue.
+
+pre-push:
+  # parallel: every check spins its own `devenv shell`, and nix handles that
+  # fine; the heavy part (the shell itself) is already built by then.
+  parallel: true
+  commands:
+    versions:
+      name: versions + std-guard
+      run: devenv shell --no-tui -- just check-env
+
+    compile:
+      name: C++17 compiles, C++23 rejected
+      run: devenv shell --no-tui -- just check-compile
+
+    sanitizers:
+      name: ASan deterministic (20 runs)
+      run: devenv shell --no-tui -- just check-asan
+
+    vimrc:
+      name: vimrc parses and keeps its guards
+      run: devenv shell --no-tui -- just check-vimrc
+
+    lint:
+      name: shellcheck + yamllint
+      run: devenv shell --no-tui -- just lint

@@ -1,9 +1,12 @@
-# ioi-env — maintainer-only extras (gitignored, not shipped to students)
+# ioi-env — maintainer-only extras (gitignored, never shipped to students)
 # The student env stays lean on purpose: everything here is something the
 # contest machines do not have, and a student who leans on it will be lost at
 # the venue.
 { pkgs, ... }: {
   packages = with pkgs; [
+    # hook runner — see lefthook.yml
+    lefthook
+    # static gates used by `just lint` and the pre-push hook
     shellcheck
     yamllint
   ];

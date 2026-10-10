@@ -81,6 +81,17 @@ bootstrap:
 shell:
     devenv shell
 
+# run every verification recipe (what the pre-push hook also runs)
+prepush:
+    just lint check-env check-compile check-vimrc check-asan
+
+# jj users run this before pushing, because `jj git push` bypasses git hooks
+prepush-jj: prepush
+    #!/usr/bin/env bash
+    echo ""
+    echo "  local checks passed — safe to run:"
+    echo "      jj git push --bookmark main"
+
 # update the pinned nixpkgs input (only when you mean to)
 update:
     devenv update
@@ -216,6 +227,38 @@ lint:
       echo "  yamllint not installed — skipped"
     fi
 
-# run every verification recipe
+# run every verification recipe (what the pre-push hook also runs)
 verify: lint check-vimrc check-env check-compile check-asan
     @echo "  all verification passed"
+
+# ══════════════════════════════════════════════════════════════════
+# maintainer — one-time local setup, not part of the student path
+# ══════════════════════════════════════════════════════════════════
+
+# install the git hooks (lefthook, from devenv.local.nix)
+hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f devenv.local.nix ]; then
+      cp devenv.local.nix.example devenv.local.nix
+      echo "  created devenv.local.nix (lefthook + shellcheck + yamllint)"
+    fi
+    devenv shell --no-tui -- lefthook install
+
+# teach this jj repo to run the pre-push checks before `jj git push`.
+# `jj git push` does not run git hooks, so without this a push silently skips
+# them. The alias lands in .jj/repo/config.toml — local only — which is why it
+# is set per clone instead of committed.
+jj-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v jj >/dev/null 2>&1 || { echo "  jj not installed"; exit 1; }
+    jj config set --repo aliases.push \
+      '["util", "exec", "--", "bash", "-c", "devenv shell --no-tui -- lefthook run pre-push && jj git push \"$@\"", ""]'
+    echo "  jj push now runs the pre-push checks first"
+
+# both hook paths: lefthook directly, and the jj alias's check step
+check-hooks: hooks jj-setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    devenv shell --no-tui -- lefthook run pre-push

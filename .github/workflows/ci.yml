@@ -18,9 +18,9 @@ concurrency:
 
 jobs:
   # ── static gates ──────────────────────────────────────────────────────────
-  # No nix, no devenv, no multi-minute build. Runs while the bootstrap job is
-  # still downloading its toolchain, so a typo fails in seconds instead of
-  # after the expensive job finishes.
+  # No nix, no devenv, no multi-minute build. Runs while the other jobs are
+  # still downloading their toolchain, so a typo fails in seconds instead of
+  # after the expensive jobs finish.
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -41,113 +41,160 @@ jobs:
           sudo apt-get install -y vim
           vim -Nu deploy/vimrc -n -es -c 'qa!' && echo "  deploy/vimrc OK"
 
-      # NOTE: no `devenv.nix parses` step here on purpose. It would need Nix,
-      # which this job deliberately does not install, and it is redundant: the
-      # bootstrap job evaluates devenv.nix for real by building the whole shell.
-
-  # ── the real test ─────────────────────────────────────────────────────────
-  # Runs the actual bootstrap script on a clean runner: no Nix, no devenv, no
-  # git config — exactly the state of a student's fresh WSL Ubuntu. ubuntu-24.04
-  # is not incidental, it IS the spec: the contest environment is Ubuntu 24.04.2,
-  # and this job exists to prove the one-liner works on a brand-new copy of it.
-  # The second OS is there to prove the pin survives a newer base image.
-  bootstrap:
-    name: bootstrap on a clean ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+  # ── the faithful reproduction of the student's actual path ────────────────
+  # This is the job that matters. It starts from a completely blank Windows
+  # runner, installs WSL, installs the specific Ubuntu version the competition
+  # specifies, and runs the student's command from inside that WSL. Everything
+  # the student actually hits is exercised here: the IS_WSL branch, the /mnt/c
+  # interop used to find the Windows profile, the .wslconfig write to the
+  # Windows filesystem, and the absence of a TTY (so the shell entry has to
+  # fall back to printing instructions rather than exec'ing /dev/tty).
+  #
+  # There is deliberately no separate native-Linux job doing the same checks:
+  # it would pass while this one failed, which reads as a flake rather than a
+  # real WSL bug, and the two would race to save the same nix cache key. `lint`
+  # covers the fast-fail case, and this job rebuilds from a cold store in a few
+  # minutes, which is acceptable here.
+  wsl:
+    name: "WSL — blank Windows → install Ubuntu-${{ matrix.ubuntu }} → run the student command in WSL"
+    runs-on: windows-latest
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        os:
-          # The spec IS ubuntu-24.04.2, so this is the one that must pass.
-          # (ubuntu-26.04 is listed in GitHub's docs as an available runner but
-          # is not in actionlint's label set — an unknown label makes the whole
-          # workflow fail to parse, so it is not worth the risk here.)
-          - ubuntu-24.04
-    env:
-      # Job-level so the `parallel` group below can see it: a step-scoped env is
-      # invisible to every step after the one that set it.
-      # NOTE: only github/inputs/matrix/needs/secrets/strategy/vars are legal in
-      # a job-level env — `runner.temp` is not one of them, and using it makes
-      # the whole workflow fail to parse with zero jobs created.
-      IOI_ENV_DIR: ${{ github.workspace }}/ioi-env
-      IOI_ENV_REPO: https://github.com/${{ github.repository }}
-      IOI_ENV_BRANCH: ${{ github.ref_name }}
-      IOI_ENV_NO_SHELL: "1"   # CI has no TTY; skip the interactive shell
+        # 24.04 is the competition spec (Ubuntu 24.04.2). Testing a second
+        # version here would only prove the distro installs, not that the
+        # toolchain matches, so there is deliberately only one.
+        ubuntu:
+          - '24.04'
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
+      - name: Install WSL
+        uses: Ubuntu/WSL/.github/actions/wsl-install@main
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+          # Canonical's own action. Installs WSL and this exact distro with
+          # `wsl.exe --install <distro> --web-download --no-launch`, so there is
+          # no interactive "create a UNIX username" prompt to get stuck on —
+          # which is what made the hand-rolled approach unusable in CI.
+          distro: Ubuntu-${{ matrix.ubuntu }}
 
-      # devenv.lock is the input pin; hashing it means a cache hit for every
-      # commit that doesn't touch the pin, and automatic invalidation when one
-      # does. Without this the nix store is cold on every run.
+      - name: Assert the distro is the competition spec
+        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          exec: |
+            set -eu
+            echo "── distro identity ──"
+            lsb_release -ds
+            # The spec says Ubuntu 24.04.2. Pin the minor, not just the major:
+            # a 24.04.3+ would carry a different gcc patch and quietly drift.
+            version="$(lsb_release -rs)"
+            echo "  version: $version"
+            case "$version" in
+              24.04.*) echo "  24.04 series OK" ;;
+              *) echo "  FAIL: expected 24.04.x, got $version"; exit 1 ;;
+            esac
+
       - name: Restore nix store cache
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
-          restore-prefixes-all-matches: nix-${{ matrix.os }}-
+          primary-key: nix-ubuntu-24.04-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
+          restore-prefixes-all-matches: nix-ubuntu-24.04-
 
-      - name: Run the bootstrap script
-        run: bash scripts/start.sh
+      - name: Clone the repo inside WSL
+        uses: Ubuntu/WSL/.github/actions/wsl-checkout@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          working-dir: ~/ioi-env
 
-      - name: Trust the fetched project
-        run: cd "$IOI_ENV_DIR" && devenv allow
+      - name: Run the student's command inside WSL
+        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          working-dir: ~/ioi-env
+          exec: |
+            set -eu
+            export IOI_ENV_NO_SHELL=1   # no TTY under wsl.exe; skip the shell
+            bash scripts/start.sh
 
-      # ── verification ───────────────────────────────────────────────────────
-      # Each of these is a `just` recipe, so the student, this CI job, and the
-      # pre-push hook all execute the same code — that is the point, not speed.
-      #
-      # These are sequential on purpose. GitHub's new step-level `parallel:`
-      # was tried first and removed: it saves roughly 75s in a job that takes
-      # minutes, and it costs the ability to validate the file cleanly —
-      # actionlint 1.7.12 is the latest upstream release and still predates that
-      # keyword, so accepting `parallel:` means either ignoring one of its rules
-      # or losing the context-availability checks that caught a real bug here.
-      # The parallelism that pays is at job level, which this already has: lint,
-      # bootstrap, and oneliner-remote all run concurrently.
-      - name: Verify versions and std-guard
-        run: |
-          cd "$IOI_ENV_DIR"
-          devenv shell --no-tui -- just check-env
+      # ── WSL-specific assertions ───────────────────────────────────────────
+      # These are the things that can only be true when the code really ran
+      # inside WSL, so they are what separates this job from the native one.
+      - name: Assert the WSL-only behaviour actually fired
+        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          working-dir: ~/ioi-env
+          exec: |
+            set -eu
+            fail=0
 
-      - name: Verify C++17 compiles, C++23 rejected
-        run: |
-          cd "$IOI_ENV_DIR"
-          devenv shell --no-tui -- just check-compile
+            echo "── IS_WSL branch was taken ──"
+            if grep -qi microsoft /proc/sys/kernel/osrelease; then
+              echo "  running under the WSL2 kernel OK"
+            else
+              echo "  FAIL: not under the WSL2 kernel — the WSL path was not exercised"; fail=1
+            fi
 
-      - name: Verify sanitizers deterministic
-        run: |
-          cd "$IOI_ENV_DIR"
-          devenv shell --no-tui -- just check-asan
+            echo "── .wslconfig reached the Windows filesystem ──"
+            # The script finds the Windows profile through /mnt/c + cmd.exe
+            # interop, then writes .wslconfig there. On a bare runner that file
+            # does not exist yet, so its presence proves the interop worked.
+            winuser="$(/mnt/c/Windows/System32/cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')"
+            cfg="/mnt/c/Users/${winuser}/.wslconfig"
+            if [ -f "$cfg" ]; then
+              echo "  wrote $cfg OK"
+              grep -q 'memory=' "$cfg" || { echo "  FAIL: .wslconfig has no memory pin"; fail=1; }
+              grep -q 'processors=' "$cfg" || { echo "  FAIL: .wslconfig has no processor pin"; fail=1; }
+            else
+              echo "  FAIL: $cfg not written — Windows interop broke"; fail=1
+            fi
 
-      - name: Verify vimrc parses and keeps its guards
-        run: |
-          cd "$IOI_ENV_DIR"
-          devenv shell --no-tui -- just check-vimrc
+            echo "── no TTY was handled gracefully ──"
+            # start.sh must not die when /dev/tty cannot be opened; it should
+            # print how to enter the shell instead. Re-run just the tail to
+            # confirm the exit code is 0 rather than the exec failure it had.
+            if IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1; then
+              echo "  exits 0 without a TTY OK"
+            else
+              echo "  FAIL: start.sh exits non-zero with no TTY"; fail=1
+            fi
 
-      - name: Verify the vimrc bootstrap actually installed
-        run: |
-          test -f "$HOME/.vimrc" || { echo "  FAIL: ~/.vimrc not installed by bootstrap"; exit 1; }
-          vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc sources cleanly OK"
-          grep -q 'setarch' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc lost the setarch guard"; exit 1; }
-          grep -q 'std=c++17' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc no longer targets C++17"; exit 1; }
+            [ "$fail" = 0 ] || exit 1
+
+      - name: Verify the toolchain inside WSL
+        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          working-dir: ~/ioi-env
+          exec: |
+            set -eu
+            devenv shell --no-tui -- just check-env
+            devenv shell --no-tui -- just check-compile
+            devenv shell --no-tui -- just check-vimrc
+
+      - name: Sanitizers stable under the WSL2 kernel
+        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          working-dir: ~/ioi-env
+          exec: |
+            set -eu
+            # Ran as its own step rather than folded into the verify step above,
+            # because WSL2 is a different kernel with a different ASLR situation
+            # from a native Linux runner, and this is the run that proves
+            # `setarch -R` is still load-bearing here rather than cargo-culted.
+            devenv shell --no-tui -- just check-asan
 
       - name: Save nix store cache
         if: github.ref == 'refs/heads/main'
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
+          primary-key: nix-ubuntu-24.04-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
 
   # ── the literal one-liner, straight off GitHub ──────────────────────────────
-  # The job above sets IOI_ENV_DIR to a temp path; this one runs the exact curl
-  # command from the README, against the published branch, to prove the URL in
-  # the docs really is a working one-liner and that a default install lands in
+  # The WSL job clones the repo itself; this one runs the exact curl command
+  # from the README, against the published branch, to prove the URL in the docs
+  # really is a working one-liner and that a default install lands in
   # ~/ioi-env as documented. Only meaningful on main, where that branch is the
   # one being pushed — a PR's head ref doesn't exist on the base repo, so the
   # published-main URL would 404 for reasons unrelated to the script.

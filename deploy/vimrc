@@ -1,0 +1,87 @@
+" ioi-env — 賽場等級 vimrc
+" 對齊競賽環境：Ubuntu 24.04 + vim 9.1，不裝任何插件。
+" 刻意保持精簡：比賽機器上沒有插件，依賴插件的習慣會在賽場失效。
+
+set nocompatible
+syntax on
+filetype plugin indent on
+
+" 外觀
+set number
+set ruler
+set laststatus=2
+set showcmd
+set showmatch
+set nowrap
+set colorcolumn=100
+set cursorline
+
+" 縮排：4 空格，對齊競賽常見風格
+set tabstop=4
+set shiftwidth=4
+set softtabstop=4
+set expandtab
+set autoindent
+set smartindent
+
+" 搜尋
+set incsearch
+set hlsearch
+set ignorecase
+set smartcase
+
+" 編輯
+set backspace=indent,eol,start
+set encoding=utf-8
+set hidden
+
+let mapleader = ' '
+
+" ============================================================
+" 編譯執行 — 對齊競賽 g++ 13.3.0 / C++17
+" ============================================================
+
+" F5：存檔 + 編譯 + 執行（讀 stdin）
+nnoremap <F5> :w<CR>:!g++ -O2 -std=c++17 -Wall -Wextra -o /tmp/a % && /tmp/a<CR>
+
+" F6：編譯 + 執行，接 input.txt
+nnoremap <F6> :w<CR>:!g++ -O2 -std=c++17 -Wall -Wextra -o /tmp/a % && /tmp/a < input.txt<CR>
+
+" F7：只編譯，不執行
+nnoremap <F7> :w<CR>:!g++ -O2 -std=c++17 -Wall -Wextra -fsyntax-only %<CR>
+
+" F8：編譯 + sanitizer 執行（對拍找 bug 用）
+" setarch -R 是必要的，不是裝飾：nix 的 ASan runtime 在高 ASLR 位址下
+" 偶發 mmap 失敗，實測 30 次有 6 次靜默 SEGV（沒有 ASan 訊息，輸出空的）。
+" 加 -R 關掉 ASLR 後 30/30 穩定。關掉它會讓學生以為是自己的 bug。
+nnoremap <F8> :w<CR>:!g++ -g -O1 -std=c++17 -fsanitize=address,undefined -o /tmp/a % && setarch $(uname -m) -R /tmp/a < input.txt<CR>
+
+" F9：只量時間與記憶體
+nnoremap <F9> :w<CR>:!g++ -O2 -std=c++17 -o /tmp/a % && /usr/bin/time -v /tmp/a < input.txt<CR>
+
+" <Leader>r：執行上一個編好的 binary（不重編）
+nnoremap <Leader>r :!/tmp/a < input.txt<CR>
+
+" ============================================================
+" 對拍
+" ============================================================
+
+" <Leader>g：跑對拍腳本（stress.sh：造測資 → 暴力解 → 比對）
+" 學生自己寫 stress.sh；沒有這個檔案就靜默不做任何事。
+if filereadable(expand('~/stress.sh'))
+  nnoremap <Leader>g :!bash ~/stress.sh<CR>
+endif
+
+" ============================================================
+" 常用
+" ============================================================
+
+" <Leader>n：關掉搜尋高亮
+nnoremap <Leader>n :nohlsearch<CR>
+
+" jj / kk：離開 insert（比 Esc 快，賽場省時間）
+inoremap jj <Esc>
+inoremap kk <Esc>
+
+" 存檔
+nnoremap <Leader>w :w<CR>

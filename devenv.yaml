@@ -1,0 +1,11 @@
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+
+require_version: ">=2.1.2"
+
+# 釘死 bash。不指定的話 devenv 沿用機器的 $SHELL，學生裝了 zsh/nushell/fish
+# 就會拿到不同的 shell，而他們的 shell rc 可能把 PATH 弄壞（實測過：本機
+# nushell config 讀 $env.HOME 失敗，導致 mktemp 找不到、devenv shell 直接炸）。
+# 另一個理由：競賽環境就是 bash，本地練的 shell 應該和賽場一致。
+shell: bash

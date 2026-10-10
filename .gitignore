@@ -1,0 +1,13 @@
+.devenv/
+.direnv/
+result
+result-*
+
+*.o
+*.out
+a.out
+/tmp_a
+
+.DS_Store
+*.swp
+*~

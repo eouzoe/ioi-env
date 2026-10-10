@@ -109,11 +109,13 @@ jobs:
               *) echo "  note: store image is $point, spec names 24.04.2 (nix-pinned compiler, so no drift)" ;;
             esac
 
-      - name: Restore nix store cache
-        uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-ubuntu-24.04-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
-          restore-prefixes-all-matches: nix-ubuntu-24.04-
+      # NOTE: no nix-store caching here. cache-nix-action documents that it
+      # supports only Linux and macOS runners, and it has to be: on Windows it
+      # would look for /nix on the host, whereas the store lives inside the WSL
+      # distro and is invisible to the host filesystem. Attempting it fails with
+      # "At least one directory or file path is required". Hand-tarring /nix out
+      # of WSL to work around this is not worth it — a cold store costs a few
+      # minutes per run on a repo nobody else is pushing to.
 
       - name: Clone the repo inside WSL
         uses: Ubuntu/WSL/.github/actions/wsl-checkout@main
@@ -199,12 +201,6 @@ jobs:
             # from a native Linux runner, and this is the run that proves
             # `setarch -R` is still load-bearing here rather than cargo-culted.
             devenv shell --no-tui -- just check-asan
-
-      - name: Save nix store cache
-        if: github.ref == 'refs/heads/main'
-        uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-ubuntu-24.04-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
 
   # ── the literal one-liner, straight off GitHub ──────────────────────────────
   # The WSL job clones the repo itself; this one runs the exact curl command

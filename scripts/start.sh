@@ -1,42 +1,32 @@
 #!/usr/bin/env sh
 # ioi-env — student one-command bootstrap.
 #
-# Targets the competition environment (Ubuntu 24.04 + gcc13 + C++17), and works
-# on any Linux — including WSL Ubuntu, where it also pins the Windows-side
-# .wslconfig that keeps timing measurements stable.
+# Targets the competition environment (Ubuntu 24.04.2 + gcc/g++ 13.3.0 + C++17
+# + vim 9.1) and works on any Linux, including WSL Ubuntu.
 #
 # Usage (the one line a student runs):
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/ioi-env/main/scripts/start.sh | bash
+#
+# This script deliberately does as little as possible: its whole job is to get
+# Nix, devenv, and this repo onto the machine, then hand off to `just`. Every
+# piece of actual setup — vimrc, .wslconfig, host steps, verification — lives in
+# the Justfile, which means CI, the pre-push hook, and the student all run the
+# exact same code. Only three things genuinely cannot live there: installing
+# Nix, installing devenv, and fetching the repo that contains the Justfile.
 #
 # Overridable via env:
 #   IOI_ENV_REPO        repo to clone (default: the one hosting this script)
 #   IOI_ENV_DIR         where to put it (default: ~/ioi-env)
 #   IOI_ENV_BRANCH      branch to fetch (default: main)
-#   IOI_ENV_WSL_MEMORY  .wslconfig memory cap (default: 8GB)
 #   IOI_ENV_NO_SHELL    set to 1 to stop before `devenv shell` (for CI)
 #   GITHUB_TOKEN        only needed for a private repo; public repo: leave empty
-#
-# What it does, in order:
-#   1. write the Windows-side .wslconfig (WSL only, no sudo needed)
-#   2. install Nix (Determinate) if absent
-#   3. install devenv
-#   4. fetch this repo into ~/ioi-env
-#   5. install the contest-grade ~/.vimrc (never clobbers an existing one)
-#   6. print the two remaining sudo-only steps
-#   7. enter the devenv shell
-#
-# It never prompts. `curl | bash` means stdin IS this script, so anything
-# interactive would deadlock; the sudo-only steps are printed, not run.
 
 set -eu
-
-# ── config ───────────────────────────────────────────────────────────────────
 
 REPO_OWNER="${IOI_ENV_OWNER:-eouzoe}"
 REPO="${IOI_ENV_REPO:-https://github.com/${REPO_OWNER}/ioi-env}"
 BRANCH="${IOI_ENV_BRANCH:-main}"
 DEST="${IOI_ENV_DIR:-$HOME/ioi-env}"
-WSL_MEM="${IOI_ENV_WSL_MEMORY:-8GB}"
 NO_SHELL="${IOI_ENV_NO_SHELL:-0}"
 
 log()   { printf '  %s\n' "$1"; }
@@ -49,55 +39,11 @@ command -v curl >/dev/null 2>&1 || die "curl is required (WSL Ubuntu ships it; e
 command -v tar  >/dev/null 2>&1 || die "tar is required (WSL Ubuntu ships it)"
 
 printf '\n  ioi-env — one command to start.\n'
-printf '  target: Ubuntu 24.04 + gcc 13.x + C++17  (competition spec)\n\n'
+printf '  target: Ubuntu 24.04.2 + gcc/g++ 13.3.0 + C++17 + vim 9.1\n'
+# shellcheck disable=SC2016  # literal backticks, not command substitution
+printf '          (the competition spec; everything else is delegated to just)\n\n'
 
-# WSL detection: the kernel release string carries "microsoft", and the C drive
-# is mounted. Either signal is enough; on a bare Linux box both are absent, and
-# every Windows-specific step below is skipped rather than faked.
-IS_WSL=0
-if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || [ -d /mnt/c/Windows ]; then
-  IS_WSL=1
-fi
-
-# ── 1. Windows-side .wslconfig ──────────────────────────────────────────────
-
-if [ "$IS_WSL" = "1" ]; then
-  head1 ".wslconfig (Windows side)"
-
-  WIN_USER=""
-  WIN_PROFILE=""
-  if [ -x /mnt/c/Windows/System32/cmd.exe ]; then
-    WIN_USER=$(/mnt/c/Windows/System32/cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r' || true)
-  fi
-  if [ -n "$WIN_USER" ] && [ -d "/mnt/c/Users/$WIN_USER" ]; then
-    WIN_PROFILE="/mnt/c/Users/$WIN_USER"
-  fi
-
-  if [ -z "$WIN_PROFILE" ]; then
-    log "could not locate the Windows profile — skipped (create .wslconfig by hand if you want this)"
-  elif [ -f "$WIN_PROFILE/.wslconfig" ]; then
-    log "$WIN_PROFILE/.wslconfig already exists — leaving it alone."
-    log "to get the pinned values, merge these in:"
-    printf '      [wsl2]\n      memory=%s\n      processors=4\n      swap=0\n' "$WSL_MEM"
-  else
-    # Write from Linux: a BOM or CRLF line endings make WSL silently ignore the
-    # ENTIRE file, so this must never be produced by a Windows editor.
-    cat > "$WIN_PROFILE/.wslconfig" <<EOF
-[wsl2]
-memory=$WSL_MEM
-processors=4
-swap=0
-localhostForwarding=true
-EOF
-    log "wrote $WIN_PROFILE/.wslconfig (memory=$WSL_MEM, processors=4, swap=0)"
-    log "takes effect after: wsl --shutdown  (from cmd, then reopen the terminal)"
-  fi
-else
-  head1 ".wslconfig"
-  log "not WSL — nothing to do"
-fi
-
-# ── 2. Nix ──────────────────────────────────────────────────────────────────
+# ── 1. Nix ──────────────────────────────────────────────────────────────────
 
 head1 "Nix"
 
@@ -121,7 +67,7 @@ for f in /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh \
 done
 command -v nix >/dev/null 2>&1 || die "nix not on PATH after install — open a new terminal and re-run"
 
-# ── 3. devenv ───────────────────────────────────────────────────────────────
+# ── 2. devenv ───────────────────────────────────────────────────────────────
 
 head1 "devenv"
 
@@ -133,7 +79,7 @@ else
 fi
 command -v devenv >/dev/null 2>&1 || die "devenv not on PATH after install — open a new terminal and re-run"
 
-# ── 4. fetch the repo ───────────────────────────────────────────────────────
+# ── 3. fetch the repo (this brings in the Justfile everything else lives in) ──
 
 head1 "repo"
 
@@ -160,8 +106,7 @@ else
   3. copy the directory in yourself, then re-run:
        IOI_ENV_DIR=/path/to/ioi-env curl -fsSL <this script> | bash"
     fi
-    # A token is set: the anonymous probe failed but the token may reach it, so
-    # fall through and let git try.
+    # A token is set: the anonymous probe failed but the token may reach it.
     log "anonymous tarball unreachable, but GITHUB_TOKEN is set — trying git clone"
   fi
 
@@ -185,73 +130,42 @@ else
 fi
 
 [ -f "$DEST/devenv.nix" ] || die "$DEST has no devenv.nix — fetch failed"
+[ -f "$DEST/Justfile" ]   || die "$DEST has no Justfile — fetch failed"
 
-# ── 5. vimrc ─────────────────────────────────────────────────────────────────
+# ── 4. hand off to `just` ────────────────────────────────────────────────────
+# Everything from here — vimrc, .wslconfig, the sudo-only host steps, all the
+# verification — is a Justfile recipe. Run the same ones CI runs.
 
-head1 "vimrc"
-
-if [ -f "$HOME/.vimrc" ]; then
-  log "$HOME/.vimrc already exists — leaving it alone"
-  log "the shipped one is at $DEST/deploy/vimrc (diff them if you're curious)"
-elif [ -f "$DEST/deploy/vimrc" ]; then
-  cp "$DEST/deploy/vimrc" "$HOME/.vimrc"
-  log "installed contest-grade ~/.vimrc (no plugins; F5 = g++ -O2 -std=c++17 -Wall)"
-else
-  log "no deploy/vimrc in $DEST — skipped"
-fi
-
-# ── 6. the steps that need a password ───────────────────────────────────────
-
-head1 "remaining host steps (need sudo — run once)"
-
-cat <<'EOS'
-  WSL appends the whole Windows PATH into Linux, dragging find.exe / sort.exe
-  along with it. Anything you type that collides with a Windows command
-  silently runs the Windows one. Turn it off, then restart WSL:
-
-    sudo tee /etc/wsl.conf >/dev/null <<'EOF'
-    [boot]
-    systemd=true
-
-    [interop]
-    appendWindowsPath=false
-
-    [automount]
-    enabled=true
-    options="metadata,umask=22,fmask=11"
-    EOF
-
-  And make the clock UTC+8 so contest start times and log timestamps line up:
-
-    sudo ln -sf /usr/share/zoneinfo/Asia/Taipei /etc/localtime
-    echo "Asia/Taipei" | sudo tee /etc/timezone
-
-  Then, from cmd:  wsl --shutdown   and reopen.
-EOS
-
-# ── 7. enter the shell ───────────────────────────────────────────────────────
-
-head1 "entering devenv shell"
+head1 "setup"
 
 cd "$DEST"
 devenv allow
 
+# First entry downloads nixpkgs plus every package; on a cold cache this is the
+# slow part, so say so instead of looking hung.
+log "downloading the pinned toolchain (nixpkgs 25.05) — this is the slow part"
+log ""
+devenv shell --no-tui -- just bootstrap
+
+head1 "verify"
+devenv shell --no-tui -- just check-env
+
+# ── 5. enter the shell ───────────────────────────────────────────────────────
+
 if [ "$NO_SHELL" = "1" ]; then
-  log "IOI_ENV_NO_SHELL=1 — stopping before the shell (run 'devenv shell' here to continue)"
+  head1 "done"
+  log "IOI_ENV_NO_SHELL=1 — stopped before the shell"
+  log "enter it with:  cd $DEST && devenv shell"
   exit 0
 fi
 
-# First entry downloads nixpkgs plus every package; on a cold cache this is the
-# slow part, so say so instead of looking hung.
-log "first-time build can take several minutes — it is downloading, not stuck"
-log ""
+head1 "entering devenv shell"
 
-# `curl | bash` leaves stdin on the script pipe, which is already at EOF by the
-# time we get here, so an interactive shell would exit instantly. Attach the
-# real terminal only when it can actually be opened — /dev/tty exists on most
-# WSL boxes but is unopenable without a controlling terminal (e.g. inside a
-# pipe, cron, or CI), and a failed `exec` would take the whole script down with
-# a nonzero exit that reads as "the install failed".
+# `curl | bash` leaves stdin on the script pipe, already at EOF, so an
+# interactive shell would exit instantly. Attach the real terminal only when it
+# can actually be opened — /dev/tty exists on most WSL boxes but is unopenable
+# without a controlling terminal (pipe, cron, CI), and a failed `exec` would
+# take the whole script down with a nonzero exit that reads as "install failed".
 if [ -e /dev/tty ] && : < /dev/tty 2>/dev/null; then
   exec devenv shell < /dev/tty
 else

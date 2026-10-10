@@ -6,77 +6,65 @@ on:
   pull_request:
 
 # A new push to the same branch supersedes the in-flight run instead of queueing
-# behind it. Purely a latency feature; without it a push-during-CI waits.
+# behind it. Purely latency; without it a push-during-CI waits.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ── cheap static gates ────────────────────────────────────────────────────
-  # No nix, no devenv, no 10-minute build. These run in parallel with the
-  # bootstrap jobs and fail fast on typos that would otherwise only surface
-  # after the expensive jobs finish.
+  # ── static gates ──────────────────────────────────────────────────────────
+  # No nix, no devenv, no multi-minute build. Runs while the bootstrap job is
+  # still downloading its toolchain, so a typo fails in seconds rather than
+  # after the expensive job finishes.
   lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
-      - name: shellcheck the bootstrap script
+      - name: Shellcheck the bootstrap script
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck
-          # -s sh: POSIX sh, not bash. The script is `#!/usr/bin/env sh` and
-          # runs under dash on Ubuntu, so bash-only constructs would pass here
-          # and die on a student's machine.
+          # -s sh: POSIX sh, not bash. The script runs under dash on Ubuntu, so
+          # bash-only constructs would pass here and die on a student's machine.
           shellcheck -s sh scripts/start.sh && echo "  start.sh lint OK"
 
-      - name: vimrc parses cleanly
+      - name: Vimrc parses cleanly
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y vim
-          # -Nu sources the file as a vimrc; any error exits non-zero.
-          vim -Nu deploy/vimrc -n -es -c 'qa!' && echo "  vimrc OK"
+          vim -Nu deploy/vimrc -n -es -c 'qa!' && echo "  deploy/vimrc OK"
 
-      - name: devenv.nix + devenv.yaml parse
-        run: |
-          # nix-instantiate --parse catches syntax errors without a full eval,
-          # which would drag in all of nixpkgs just to find a missing brace.
-          nix-instantiate --parse devenv.nix >/dev/null && echo "  devenv.nix OK"
+      - name: devenv.nix parses
+        run: nix-instantiate --parse devenv.nix >/dev/null && echo "  devenv.nix OK"
 
   # ── the real test ─────────────────────────────────────────────────────────
-  # Runs the actual bootstrap script on a clean runner: no nix, no devenv, no
-  # git config — exactly the state a student's fresh WSL Ubuntu is in. Then
-  # verifies the toolchain it produced still matches the competition spec.
-  #
-  # Parallelism: every (os x fetch) pair is its own runner, started at once.
-  # fail-fast: false so one broken combo doesn't cancel the others before they
-  # report; max-parallel caps concurrent runners so a fork's PR doesn't try to
-  # spin up dozens at once.
+  # Runs the actual bootstrap script on a clean runner: no Nix, no devenv, no
+  # git config — exactly the state of a student's fresh WSL Ubuntu. ubuntu-24.04
+  # is not incidental, it IS the spec: the contest environment is Ubuntu 24.04.2,
+  # and this job exists to prove the one-liner works on a brand-new copy of it.
   bootstrap:
-    name: bootstrap / ${{ matrix.os }} / ${{ matrix.fetch }}
-    runs-on: ${{ matrix.os }}
+    name: bootstrap on a clean ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 2
       matrix:
-        os:
-          - ubuntu-24.04        # the competition spec OS
-          - ubuntu-26.04        # one LTS ahead: proves nix pins the compiler regardless
-        fetch:
-          - local               # already on disk; tests the install path only
-          - remote              # clones from GitHub; tests the fetch path too
+        runner:
+          - ubuntu-24.04      # the spec. this one is the requirement.
+          - ubuntu-26.04      # one LTS ahead: proves the pin survives a newer base
     steps:
       - uses: actions/checkout@v7
 
       # devenv.lock is the input pin; hashing it means a cache hit for every
-      # commit that doesn't touch the pin, and an automatic invalidation when
-      # one does. Without this the nix store is cold every run.
+      # commit that doesn't touch the pin, and automatic invalidation when one
+      # does. Without this the nix store is cold on every run.
       - name: Restore nix store cache
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
-          restore-prefixes-fallback: nix-${{ matrix.os }}-
-          restore-key-if-no-exact-match: nix-${{ matrix.os }}-
+          primary-key: nix-${{ matrix.runner }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
+          restore-prefixes-fallback: nix-${{ matrix.runner }}-
+          restore-key-if-no-exact-match: nix-${{ matrix.runner }}-
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
@@ -88,98 +76,64 @@ jobs:
       - name: Run the bootstrap script
         env:
           IOI_ENV_NO_SHELL: "1"   # CI has no TTY; skip the interactive shell
-          IOI_ENV_DIR: ${{ matrix.fetch == 'local' && github.workspace || format('{0}/ioi-env-run', runner.temp) }}
+          IOI_ENV_DIR: ${{ github.workspace }}/ioi-env
           IOI_ENV_REPO: https://github.com/${{ github.repository }}
           IOI_ENV_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: bash scripts/start.sh
 
-      - name: Verify the toolchain matches the competition spec
-        run: |
-          cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
-          devenv allow
-          # `just check-env` is the single source of truth: it carries the
-          # version pins, the missing-tool sweep, and the std-guard that fails
-          # if <print> ever compiles. CI runs the same recipe a student runs.
-          devenv shell --no-tui -- just check-env
+      # ── parallel verification ─────────────────────────────────────────────
+      # Each of these is a `just` recipe, so the student, this CI job, and the
+      # pre-push hook all execute the same code. They used to run one after
+      # another; `parallel` runs them as concurrent background steps with an
+      # implicit wait at the end of the group, and keeps each one's log
+      # separate instead of interleaving them the way `&` in a shell would.
+      #
+      # The group is bounded by the same 10-concurrent-step limit as any
+      # background step; five is well inside it.
+      - name: Verify
+        run: cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}" && devenv allow
+        parallel:
+          - name: Versions and std-guard
+            run: |
+              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              devenv shell --no-tui -- just check-env
 
-      - name: Compile, run, and reject the wrong standard
-        run: |
-          cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
-          # Everything here runs INSIDE the devenv shell so it sees gcc13, not
-          # whatever gcc the runner image happens to ship.
-          devenv shell --no-tui -- bash -euo pipefail <<'VERIFY'
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
+          - name: C++17 compiles, C++23 rejected
+            run: |
+              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              devenv shell --no-tui -- just check-compile
 
-          cat > "$tmp/a.cpp" <<'CPP'
-          #include <iostream>
-          #include <vector>
-          int main()
-          {
-              int n;
-              std::cin >> n;
-              std::vector<int> v(n);
-              for (auto& x : v) std::cin >> x;
-              long long s = 0;
-              for (int x : v) s += x;
-              std::cout << s << '\n';
-          }
-          CPP
+          - name: Sanitizers deterministic
+            run: |
+              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              devenv shell --no-tui -- just check-asan
 
-          g++ -O2 -std=c++17 -Wall -Wextra "$tmp/a.cpp" -o "$tmp/a"
-          echo "3 1 2 3" | "$tmp/a" | grep -qx 6 && echo "  C++17 compile+run OK"
+          - name: Vimrc parses and keeps its guards
+            run: |
+              cd "${IOI_ENV_DIR:-$GITHUB_WORKSPACE}"
+              devenv shell --no-tui -- just check-vimrc
 
-          # <print> is C++23. The judge's gcc 13.3 must reject it, and so must
-          # ours — if this ever compiles, the pin silently drifted to a newer
-          # compiler and every student's muscle memory is now wrong.
-          cat > "$tmp/b.cpp" <<'CPP'
-          #include <print>
-          int main() { std::println("x"); }
-          CPP
-          if g++ -O2 -std=c++17 "$tmp/b.cpp" -o "$tmp/b" 2>/dev/null; then
-            echo "  FAIL: <print> compiled — the compiler pin drifted to C++23"
-            exit 1
-          else
-            echo "  C++23 correctly rejected OK"
-          fi
-
-          # ASan must be deterministic. nix's ASan runtime intermittently
-          # fails to mmap under high-entropy ASLR (measured 6/30 silent
-          # SEGVs), which is why every sanitizer invocation goes through
-          # setarch -R. A regression here would send students chasing
-          # bugs that are not theirs.
-          g++ -g -O1 -std=c++17 -fsanitize=address,undefined "$tmp/a.cpp" -o "$tmp/a_san"
-          bad=0
-          for _ in $(seq 1 20); do
-            [ "$(echo '3 1 2 3' | setarch "$(uname -m)" -R "$tmp/a_san" 2>/dev/null)" = "6" ] || bad=$((bad+1))
-          done
-          if [ "$bad" -eq 0 ]; then
-            echo "  ASan deterministic 20/20 OK"
-          else
-            echo "  FAIL: ASan failed $bad/20 runs"
-            exit 1
-          fi
-          VERIFY
-
-      - name: vimrc was installed and works
-        run: |
-          test -f "$HOME/.vimrc" || { echo "  FAIL: ~/.vimrc not installed"; exit 1; }
-          vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc sources cleanly OK"
-          grep -q 'std=c++17' "$HOME/.vimrc" || { echo "  FAIL: vimrc no longer targets C++17"; exit 1; }
+          - name: The vimrc that actually got installed
+            run: |
+              test -f "$HOME/.vimrc" || { echo "  FAIL: ~/.vimrc not installed by bootstrap"; exit 1; }
+              vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc sources cleanly OK"
+              grep -q 'setarch' "$HOME/.vimrc" || { echo "  FAIL: installed vimrc lost the setarch guard"; exit 1; }
 
       - name: Save nix store cache
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ matrix.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
+          primary-key: nix-${{ matrix.runner }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
   # ── the literal one-liner, straight off GitHub ──────────────────────────────
-  # The job above clones the repo itself; this one runs the exact curl command
-  # from the README, against the published branch, to prove the URL in the docs
-  # really is a working one-liner. Only meaningful on main, where that branch is
-  # the one being pushed — a PR's head ref doesn't exist on the base repo.
+  # The job above points IOI_ENV_DIR at the workspace; this one runs the exact
+  # curl command from the README against the published branch, to prove the URL
+  # in the docs really is a working one-liner. Only meaningful on main, where
+  # that branch is the one being pushed — a PR's head ref doesn't exist on the
+  # base repo, so a clone from there would 404 for reasons unrelated to the
+  # script.
   oneliner-remote:
-    name: oneliner (curl | bash) from published main
+    name: one-liner (curl | bash) from published main
     runs-on: ubuntu-24.04
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -193,6 +147,4 @@ jobs:
         run: |
           cd "$HOME/ioi-env"
           devenv allow
-          devenv shell --no-tui -- bash -c '
-            g++ -O2 -std=c++17 -Wall -Wextra -x c++ - -o /tmp/t <<<"#include <iostream>
-            int main(){ std::cout << 42 << \"\n\"; }" && /tmp/t | grep -qx 42 && echo "  one-liner toolchain OK"'
+          devenv shell --no-tui -- just check-env

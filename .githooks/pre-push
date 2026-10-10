@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+# ioi-env — pre-push validation.
+#
+# Installed with:  git config core.hooksPath .githooks
+#
+# Why this exists: the version pins are the entire product. A push that
+# silently moves gcc13 off 13.3.0, or drops the setarch -R guard from the
+# vimrc, ships a toolchain that no longer matches the competition spec — and
+# nobody notices until a student's code fails to compile at the venue. CI
+# catches it too, but only after the push; this catches it before, which is
+# the difference between "don't push" and "revert and re-notify the student".
+#
+# Scope: only the checks that are cheap and local. The full end-to-end run on
+# a clean Ubuntu belongs in CI, because it needs a clean machine.
+
+set -eu
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+# The verification recipes all need the devenv shell, and building it for the
+# first time takes minutes. If the store is already warm we run everything;
+# otherwise only the static lint, and we say so.
+warm=0
+if command -v devenv >/dev/null 2>&1 && [ -d .devenv ]; then
+  warm=1
+fi
+
+printf '\n  ioi-env pre-push validation\n\n'
+
+printf '── static ──\n'
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck -s sh scripts/start.sh && printf '  start.sh lint OK\n'
+else
+  printf '  shellcheck absent — skipped (install it: nix profile install nixpkgs#shellcheck)\n'
+fi
+[ -f deploy/vimrc ] || { printf '  FAIL: deploy/vimrc missing\n' >&2; exit 1; }
+
+if [ "$warm" = "1" ]; then
+  printf '── toolchain ──\n'
+  devenv shell --no-tui -- just check-env
+  printf '── behaviour ──\n'
+  devenv shell --no-tui -- just check-compile
+  devenv shell --no-tui -- just check-vimrc
+  printf '── asan (20 runs) ──\n'
+  devenv shell --no-tui -- just check-asan
+  printf '\n  pre-push: all checks passed\n\n'
+else
+  printf '\n  pre-push: static checks only.\n'
+  printf '  To run the full toolchain checks locally first:\n'
+  printf '      cd %s && devenv shell && just verify\n\n' "$root"
+fi

@@ -10,13 +10,22 @@
 # 其餘工具一律**不**放進這裡，改用 distro 現成的：
 #   vim 9.1.0016  ← rootfs 自帶，正是簡章寫的 9.1
 #   python3 / git / diffutils / time ← rootfs 自帶
-# 理由有三：judge 不用 vim 或 python 編譯，它們的版本不影響提交；多裝一個就多
-# 一次下載；而 distro 已带的版本已經對得上規格。少即是對。
+# 理由：judge 不用 vim 或 python 編譯，它們的版本不影響提交；多裝一個就多一次
+# 下載；而 distro 已帶的版本已經對得上規格。少即是對。
+#
+# 唯一的例外是 just。Ubuntu 24.04 的 WSL rootfs 不帶它（已對照 Canonical 的
+# package manifest 逐項確認），而它是「學生、CI、pre-push 跑同一份 recipe」的
+# 唯一機制，沒有它就退化回三份各自漂移的程式碼。一個 Go binary，代價很小。
+# 第一次精簡時我把它也刪了，結果 CI 直接 exec: just: not found —— 本地會過
+# 是因為我自己的 nix profile 裡有 just，這就是為甚麼這類事必須在乾淨環境測。
 let
   gcc13 = pkgs.gcc13;
 in
 {
-  packages = [ gcc13 ];
+  packages = with pkgs; [
+    just
+    gcc13
+  ];
 
   dotenv.enable = false;
 
@@ -27,6 +36,7 @@ in
   enterShell = ''
     echo "ioi-env — g++ $(g++ --version | head -1 | grep -o '[0-9.]*$') · C++17 (judge 用這版)"
     echo "  vim $(vim --version | head -1 | awk '{print $5}') · python3 $(python3 --version 2>&1 | awk '{print $2}')  ← distro 現成"
+    echo ""
     echo "  vim work/sol.cpp       寫題"
     echo "  F5                     編譯執行 (g++ -O2 -std=c++17 -Wall)"
     echo "  just check-env         釘子漂了會紅"

@@ -56,6 +56,11 @@ jobs:
     # NOTE: repo/branch for start.sh's own fetch is resolved per-step below,
     # because hashFiles()-style env resolution is only legal in step-level
     # contexts and the expressions here reference github.event.
+    # NOTE: job-level env is NOT visible inside WSL. wsl-bash is a PowerShell
+    # composite action that pipes the exec script into `bash script.sh`, and only
+    # variables exported inside that script survive. (Learned the hard way: a
+    # run hung for 30 minutes because IOI_ENV_NO_SHELL was only set here, so
+    # start.sh fell through to `exec devenv shell` and waited forever on a TTY.)
     env:
       IOI_ENV_NO_SHELL: "1"
     steps:
@@ -111,6 +116,9 @@ jobs:
           # fork PR 的 head 只在 fork 上，base repo 抓不到，所以用 head.repo。
           exec: |
             set -eu
+            # NO_SHELL is load-bearing: without it start.sh execs `devenv shell`
+            # and blocks forever, because there is no TTY under wsl.exe.
+            export IOI_ENV_NO_SHELL=1
             export IOI_ENV_REPO="https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}"
             export IOI_ENV_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
             bash scripts/start.sh

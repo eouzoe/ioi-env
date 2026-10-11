@@ -88,6 +88,9 @@ lint:
     set -uo pipefail
     command -v shellcheck >/dev/null 2>&1 && shellcheck -s sh scripts/start.sh && echo "  start.sh lint OK" || echo "  shellcheck skipped"
     command -v actionlint >/dev/null 2>&1 && actionlint .github/workflows/ci.yml && echo "  ci.yml actionlint OK" || echo "  actionlint skipped"
+    # 不变量：任何執行 start.sh 的步驟都必須設 IOI_ENV_NO_SHELL。漏了不會報錯，
+    # 會靜靜卡住等一個不存在的 TTY——實際掛過 36 分鐘。actionlint 查不出這種事。
+    python3 scripts/check-ci-invariants.py && echo "  ci invariants OK"
 
 hooks:
     #!/usr/bin/env bash

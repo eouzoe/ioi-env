@@ -151,6 +151,7 @@ jobs:
           # 同上：這個 step 也要抓 PR 自己的碼，不是已發布的 main。
           exec: |
             set -eu
+            export IOI_ENV_NO_SHELL=1
             export IOI_ENV_REPO="https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}"
             export IOI_ENV_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
             dest="$HOME/ioi-env-fetched"

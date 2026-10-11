@@ -53,6 +53,11 @@ jobs:
         # 24.04 是規格系列。多測一版只會證明發行版裝得起來，不會證明工具鏈對。
         ubuntu:
           - '24.04'
+    # NOTE: repo/branch for start.sh's own fetch is resolved per-step below,
+    # because hashFiles()-style env resolution is only legal in step-level
+    # contexts and the expressions here reference github.event.
+    env:
+      IOI_ENV_NO_SHELL: "1"
     steps:
       # Canonical 自己的 action：`wsl.exe --install <distro> --web-download
       # --no-launch`，所以不會卡在「建立 UNIX 使用者」的互動提示——那就是手刻
@@ -100,9 +105,14 @@ jobs:
         with:
           distro: Ubuntu-${{ matrix.ubuntu }}
           working-dir: ~/ioi-env
+          # wsl-bash 只接受 distro/exec/working-dir，env 要在腳本裡 export。
+          # 抓 **這個 commit**，不是遠端 main：少了它，PR 上跑的是已發布的舊碼，
+          # 綠色完全沒有意義，而你以為改動被驗證過了。
+          # fork PR 的 head 只在 fork 上，base repo 抓不到，所以用 head.repo。
           exec: |
             set -eu
-            export IOI_ENV_NO_SHELL=1
+            export IOI_ENV_REPO="https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}"
+            export IOI_ENV_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
             bash scripts/start.sh
 
       # 學生已經有 ~/.vimrc 時不能被覆蓋——那對他來說是救不回來的。
@@ -130,12 +140,14 @@ jobs:
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main
         with:
           distro: Ubuntu-${{ matrix.ubuntu }}
+          # 同上：這個 step 也要抓 PR 自己的碼，不是已發布的 main。
           exec: |
             set -eu
+            export IOI_ENV_REPO="https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}"
+            export IOI_ENV_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
             dest="$HOME/ioi-env-fetched"
             rm -rf "$dest"
-            IOI_ENV_DIR="$dest" IOI_ENV_NO_SHELL=1 \
-              bash ~/ioi-env/scripts/start.sh >/dev/null 2>&1
+            IOI_ENV_DIR="$dest" bash ~/ioi-env/scripts/start.sh >/dev/null 2>&1
             test -f "$dest/devenv.nix" || { echo "  FAIL: did not fetch a working repo"; exit 1; }
             test -f "$dest/Justfile" || { echo "  FAIL: fetched repo has no Justfile"; exit 1; }
             echo "  fetched into $dest OK"
@@ -188,12 +200,21 @@ jobs:
     name: one-liner (curl | bash) from published main
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Run the README one-liner verbatim
         env:
           IOI_ENV_NO_SHELL: "1"
-        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/start.sh" | bash
+          # Against the code under review: on a PR, curl the PR's own branch in
+          # the fork; on main, curl published main exactly as the README says.
+          # A green run that only ever tested published main would miss every
+          # regression introduced by the PR it is supposed to be gating.
+          ONELINER_REF: ${{ github.event.pull_request.head.ref || 'main' }}
+          ONELINER_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: |
+          ref="${ONELINER_REF}"
+          repo="${ONELINER_REPO}"
+          echo "  curl from $repo@$ref"
+          curl -fsSL "https://raw.githubusercontent.com/${repo}/${ref}/scripts/start.sh" | bash
 
       - name: It landed in ~/ioi-env
         run: |

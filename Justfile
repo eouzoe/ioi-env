@@ -57,6 +57,23 @@ check-env:
       if command -v "$c" >/dev/null 2>&1; then printf '  %-10s ok\n' "$c"; else printf '  %-10s MISSING\n' "$c"; fail=1; fi
     done
     [ -d "$DEVENV_PROFILE/share/oh-my-zsh" ] && echo "  oh-my-zsh ok" || { echo "  oh-my-zsh MISSING"; fail=1; }
+
+    # 純度檢查。被咬三次才加的：just 兩次在重寫時被從 packages 移除，而本地照樣
+    # 全綠，只有 CI 才炸。原因是 `devenv shell -- just ...` 裡的 just 會從我
+    # 外層環境的 PATH 繼承過來，devenv profile 裡沒有也照樣跑得動。
+    #
+    # 所以判據不是 command -v 解析到哪（那會拿到繼承來的那個），而是
+    # DEVENV_PROFILE/bin 底下有沒有這個 binary。just 移除時它就不見，本地立刻紅。
+    # g++ 不用這項：它有版本釘子（13.3.0）擋著，而且 gcc-wrapper 的 store path
+    # 永遠不會等於 DEVENV_PROFILE/bin 下的 symlink。
+    for bin in just; do
+      if [ -x "$DEVENV_PROFILE/bin/$bin" ]; then
+        printf '  %-10s in devenv profile ok\n' "$bin"
+      else
+        printf '  %-10s NOT IN devenv profile — leaked from the outer PATH\n' "$bin"
+        fail=1
+      fi
+    done
     if [ "$fail" = 0 ]; then echo "  all good"; else exit 1; fi
 
 # ══════════════════════════════════════════════════════════════════

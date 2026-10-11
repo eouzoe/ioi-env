@@ -114,11 +114,15 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
+            # 備份真的 vimrc 再還原。少了這步，哨兵會留下來，後面讀按鍵的步驟
+            # 就拿到一個沒有映射的空檔而失敗——那是我自己造成的假失敗。
+            cp "$HOME/.vimrc" "$HOME/.vimrc.real"
             printf 'SENTINEL_DO_NOT_TOUCH\n' > "$HOME/.vimrc"
             IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1
             grep -qx 'SENTINEL_DO_NOT_TOUCH' "$HOME/.vimrc" \
-              || { echo "  FAIL: ~/.vimrc was overwritten"; exit 1; }
-            echo "  ~/.vimrc left untouched OK"
+              || { mv "$HOME/.vimrc.real" "$HOME/.vimrc"; echo "  FAIL: ~/.vimrc was overwritten"; exit 1; }
+            mv "$HOME/.vimrc.real" "$HOME/.vimrc"
+            echo "  ~/.vimrc left untouched OK (real vimrc restored)"
 
       # start.sh 自己抓 repo 的路徑。wsl-checkout 已先把 repo 放好，所以這段程式碼
       # 在這個 job 裡從未跑過——而它是學生唯一會走的路。
@@ -160,13 +164,9 @@ jobs:
             maps=$(vim -Nu "$HOME/.vimrc" -n -es \
                    -c 'redir! > /dev/stdout | silent nmap <F5> | silent nmap <F6> | silent nmap <F7> | silent nmap <F8> | silent nmap <Leader>d | redir END' \
                    -c 'qa!' 2>/dev/null || true)
-            for k in F5 F6 F7 F8 "<Leader>d"; do
-              echo "$maps" | grep -q "g++" || { echo "  FAIL: $k not mapped to a compile command"; exit 1; }
-              break
-            done
-            n=$(echo "$maps" | grep -c "g++")
-            [ "$n" -ge 5 ] || { echo "  FAIL: only $n of 5 debug/compile keys mapped"; exit 1; }
-            echo "  all 5 compile/debug keys mapped OK"
+            n=$(printf '%s' "$maps" | grep -c 'g++')
+            [ "$n" -ge 5 ] || { echo "  FAIL: only $n of 5 compile/debug keys mapped"; exit 1; }
+            echo "  all $n compile/debug keys mapped OK"
 
       # zsh + oh-my-zsh 必須真的載入，不只是裝著。
       - name: zsh and oh-my-zsh actually load

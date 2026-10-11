@@ -56,7 +56,10 @@ check-env:
     for c in zsh make diff python3; do
       if command -v "$c" >/dev/null 2>&1; then printf '  %-10s ok\n' "$c"; else printf '  %-10s MISSING\n' "$c"; fail=1; fi
     done
-    [ -d "$DEVENV_PROFILE/share/oh-my-zsh" ] && echo "  oh-my-zsh ok" || { echo "  oh-my-zsh MISSING"; fail=1; }
+    # DEVENV_PROFILE 只在 `devenv shell` 裡有；CI 的裸 shell 沒有它，而 set -u 會
+    # 讓未綁定引用直接致命。用 repo 下的 .devenv/profile 當 fallback——路徑穩定。
+    profile="${DEVENV_PROFILE:-$PWD/.devenv/profile}"
+    [ -f "$profile/share/oh-my-zsh/oh-my-zsh.sh" ] && echo "  oh-my-zsh ok" || { echo "  oh-my-zsh MISSING ($profile)"; fail=1; }
 
     # 純度檢查。被咬三次才加的：just 兩次在重寫時被從 packages 移除，而本地照樣
     # 全綠，只有 CI 才炸。原因是 `devenv shell -- just ...` 裡的 just 會從我
@@ -67,7 +70,7 @@ check-env:
     # g++ 不用這項：它有版本釘子（13.3.0）擋著，而且 gcc-wrapper 的 store path
     # 永遠不會等於 DEVENV_PROFILE/bin 下的 symlink。
     for bin in just; do
-      if [ -x "$DEVENV_PROFILE/bin/$bin" ]; then
+      if [ -x "$profile/bin/$bin" ]; then
         printf '  %-10s in devenv profile ok\n' "$bin"
       else
         printf '  %-10s NOT IN devenv profile — leaked from the outer PATH\n' "$bin"

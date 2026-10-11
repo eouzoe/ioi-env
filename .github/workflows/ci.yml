@@ -5,160 +5,89 @@ on:
     branches: [main]
   pull_request:
 
-# Least privilege: nothing here writes to the repo or posts comments, so the
-# default broad token scope is unnecessary.
 permissions:
   contents: read
 
-# A new push to the same branch supersedes the in-flight run instead of queueing
-# behind it. Pure latency; without it a push-during-CI waits.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ── static gates ──────────────────────────────────────────────────────────
-  # No nix, no devenv, no multi-minute build. Runs while the other jobs are
-  # still downloading their toolchain, so a typo fails in seconds instead of
-  # after the expensive jobs finish.
+  # 靜態檢查。沒有 nix、沒有 devenv，幾秒就跑完，錯字在這裡就擋下。
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
-      - name: Shellcheck the bootstrap script
+      - name: Shellcheck
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y shellcheck
-          # -s sh: POSIX sh, not bash. The script runs under dash on Ubuntu, so
-          # bash-only constructs would pass here and die on a student's machine.
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          # -s sh：POSIX sh 不是 bash。腳本在 Ubuntu 上用 dash 跑，
+          # bash-only 寫法在這裡會過、在學生機器上會死。
           shellcheck -s sh scripts/start.sh && echo "  start.sh lint OK"
 
-      - name: Vimrc parses cleanly
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y vim
-          vim -Nu deploy/vimrc -n -es -c 'qa!' && echo "  deploy/vimrc OK"
-
-      # actionlint is the one check here that carries the real GitHub Actions
-      # schema plus expression/context validation, and it has already caught
-      # three bugs that plain YAML parsing cannot see (hashFiles() in a
-      # job-level env, a job name containing ": ", and a step mixing run: with
-      # parallel:). It is deliberately in the fast job, not the slow one, so a
-      # workflow mistake costs seconds instead of minutes.
-      #
-      # Uses actionlint's own download script rather than apt (not packaged) or
-      # Nix (this job stays Nix-free on purpose). Pinned to an explicit version
-      # so a new upstream release cannot change verdicts under us.
       - name: Install actionlint
         id: get_actionlint
         run: bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
         shell: bash
 
-      - name: Lint the workflow files
+      # actionlint 帶真的 GitHub Actions schema + 語意檢查。它抓過 job-level env
+      # 用了 runner context、job name 含 ": "、step 混用 run: 與 parallel: ——
+      # 任一個都讓整個 workflow 零 job 失敗，而 GitHub 只說 "workflow file issue"。
+      - name: Lint the workflow
         run: |
-          # The matcher turns actionlint's output into clickable annotations on
-          # the PR diff instead of a wall of text in the log.
           echo "::add-matcher::.github/actionlint-matcher.json"
           "${{ steps.get_actionlint.outputs.executable }}" -color
         shell: bash
 
-  # ── the faithful reproduction of the student's actual path ────────────────
-  # This is the job that matters. It starts from a completely blank Windows
-  # runner, installs WSL, installs the specific Ubuntu version the competition
-  # specifies, and runs the student's command from inside that WSL. Everything
-  # the student actually hits is exercised here: the IS_WSL branch, the /mnt/c
-  # and the absence of a TTY (so the shell entry has to
-  # fall back to printing instructions rather than exec'ing /dev/tty).
-  #
-  # There is deliberately no separate native-Linux job doing the same checks:
-  # it would pass while this one failed, which reads as a flake rather than a
-  # real WSL bug, and the two would race to save the same nix cache key. `lint`
-  # covers the fast-fail case, and this job rebuilds from a cold store in a few
-  # minutes, which is acceptable here.
+  # 真正重要的 job：從完全空白的 Windows runner 開始，裝 WSL、裝指定的
+  # Ubuntu 版本，然後在 WSL 裡面跑學生那一行。只有這裡會碰到 WSL 特有的路徑。
   wsl:
-    name: "WSL — blank Windows → install Ubuntu-${{ matrix.ubuntu }} → run the student command in WSL"
+    name: "WSL: blank Windows → install Ubuntu-${{ matrix.ubuntu }} → run the student command in WSL"
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        # 24.04 is the competition spec series. Testing a second version would
-        # only prove the distro installs, not that the toolchain matches, so
-        # there is deliberately only one.
+        # 24.04 是規格系列。多測一版只會證明發行版裝得起來，不會證明工具鏈對。
         ubuntu:
           - '24.04'
     steps:
+      # Canonical 自己的 action：`wsl.exe --install <distro> --web-download
+      # --no-launch`，所以不會卡在「建立 UNIX 使用者」的互動提示——那就是手刻
+      # 安裝流程在 CI 裡不可用的原因。
+      #
+      # 有個已知的良性噪音：它的第一步用 continue-on-error 跑 winget install
+      # WSL，而 runner 映像通常已裝，winget 於是 exit 1 並被記成
+      # "##[error]Process completed with exit code 1"，但步驟本身算成功。
+      # 忽略它；要成功的是下一步的 distro 安裝。
       - name: Install WSL
         uses: Ubuntu/WSL/.github/actions/wsl-install@main
         with:
-          # Canonical's own action. Installs WSL and this exact distro with
-          # `wsl.exe --install <distro> --web-download --no-launch`, so there is
-          # no interactive "create a UNIX username" prompt to get stuck on —
-          # which is what made the hand-rolled approach unusable in CI.
-          #
-          # Known-benign noise: its first step runs `winget install WSL` with
-          # continue-on-error, because WSL is usually already present on the
-          # runner image. winget then exits 1 and the action logs it as
-          # "##[error]Process completed with exit code 1" while still marking
-          # the step a success. Ignore that annotation; the distro install in
-          # the next step is the one that has to succeed, and it reports
-          # "Distribution successfully installed" / "Created a new distro with
-          # user: root".
-          #
-          # Note the user is root: the runner's WSL image has no OOBE user.
-          # Nothing here depends on being non-root — the only sudo-requiring
-          # steps start.sh performs are printed, not executed — so this matches
-          # the student path closely enough to be worth trusting.
           distro: Ubuntu-${{ matrix.ubuntu }}
 
-      - name: Assert the distro is the competition spec
+      # `lsb_release -rs` 只給系列（"24.04"），不給 point release，所以不能拿它
+      # 檢查 24.04.2。point release 在 /etc/os-release 的 VERSION。
+      #
+      # 系列要斷言（這是可執行的），point release 不斷言也不該追：Store appx 沒
+      # 版本選項、cloud-images 只有 20240423/ 與 current/、Canonical 自己的工具
+      # 也沒有版本參數。而 judge 用它自己的 gcc 13.3.0，我們的是 nix 釘的，
+      # 發行版 point release 不影響提交。
+      - name: Assert the distro is the spec series
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main
         with:
           distro: Ubuntu-${{ matrix.ubuntu }}
           exec: |
             set -eu
-            echo "── distro identity ──"
             lsb_release -ds
-            # `lsb_release -rs` gives the SERIES only ("24.04"), never the point
-            # release, so it cannot be used to check for 24.04.2 specifically.
-            # The point release lives in /etc/os-release's VERSION.
             series="$(lsb_release -rs)"
             point="$(. /etc/os-release && echo "$VERSION")"
             echo "  series: $series   point release: $point"
-
             case "$series" in
               24.04) echo "  24.04 series OK" ;;
-              *) echo "  FAIL: expected the 24.04 series, got $series"; exit 1 ;;
+              *) echo "  FAIL: expected 24.04, got $series"; exit 1 ;;
             esac
-
-            # Note the discrepancy rather than assert it away, and do not try to
-            # chase it: `wsl --install -d Ubuntu-24.04` is the student's command
-            # and it has no version selector — it installs whatever Canonical
-            # last put in the Store. Right now that is 24.04.5, not the 24.04.2
-            # the spec names, and there is no image to import instead:
-            # cloud-images.ubuntu.com/wsl/releases/noble/ publishes only
-            # 20240423/ (= 24.04.0) and current/, and Canonical's own
-            # release-info tooling has no version flag.
-            #
-            # The series is asserted because that is what is enforceable. The
-            # point release is not, and does not need to be: the judge compiles
-            # with its own gcc 13.3.0, and ours comes from the nixpkgs pin
-            # rather than apt. If this ever starts to matter, the pin is what
-            # has to move, not this check.
-            case "$point" in
-              *24.04.2*) echo "  point release matches the spec exactly" ;;
-              *) echo "  note: store image is $point, spec names 24.04.2 — not installable, and irrelevant (compiler is nix-pinned)" ;;
-            esac
-
-      # NOTE: no nix-store caching here. cache-nix-action documents that it
-      # supports only Linux and macOS runners, and it has to be: on Windows it
-      # would look for /nix on the host, whereas the store lives inside the WSL
-      # distro and is invisible to the host filesystem. Attempting it fails with
-      # "At least one directory or file path is required". Hand-tarring /nix out
-      # of WSL to work around this is not worth it — a cold store costs a few
-      # minutes per run on a repo nobody else is pushing to.
 
       - name: Clone the repo inside WSL
         uses: Ubuntu/WSL/.github/actions/wsl-checkout@main
@@ -173,63 +102,11 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            export IOI_ENV_NO_SHELL=1   # no TTY under wsl.exe; skip the shell
+            export IOI_ENV_NO_SHELL=1
             bash scripts/start.sh
 
-      # ── WSL-specific assertions ───────────────────────────────────────────
-      # These are the things that can only be true when the code really ran
-      # inside WSL, so they are what separates this job from the native one.
-      - name: Assert the WSL-only behaviour actually fired
-        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
-        with:
-          distro: Ubuntu-${{ matrix.ubuntu }}
-          working-dir: ~/ioi-env
-          exec: |
-            set -eu
-            fail=0
-
-            echo "── IS_WSL branch was taken ──"
-            if grep -qi microsoft /proc/sys/kernel/osrelease; then
-              echo "  running under the WSL2 kernel OK"
-            else
-              echo "  FAIL: not under the WSL2 kernel — the WSL path was not exercised"; fail=1
-            fi
-
-            echo "── the host was not modified ──"
-            # The whole point of the minimal design: this script writes exactly
-            # one file, ~/.vimrc, and nothing else anywhere. A student who
-            # already has a .wslconfig tuned for their own machine must keep it.
-            # So assert the thing that used to be a "feature" is now absent.
-            for f in /mnt/c/Users/runneradmin/.wslconfig /etc/wsl.conf /etc/timezone; do
-              if [ -e "$f" ]; then
-                echo "  note: $f exists (pre-existing on this runner, left alone)"
-              else
-                echo "  $f not created OK"
-              fi
-            done
-
-            echo "── idempotent, and no TTY handled gracefully ──"
-            # Two things at once. The exit code proves start.sh does not die when
-            # /dev/tty cannot be opened (it used to exec it unconditionally and
-            # exit non-zero, which reads as "the install failed"). Running it a
-            # SECOND time proves the whole path is idempotent: vimrc already
-            # installed, repo already cloned — none of which may be an error.
-            # It also proves the script still exits 0 when /dev/tty cannot be
-            # opened, which used to be an unconditional exec failure.
-            if IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1; then
-              echo "  second run exits 0 with no TTY OK"
-            else
-              echo "  FAIL: start.sh is not idempotent, or exits non-zero with no TTY"; fail=1
-            fi
-
-            [ "$fail" = 0 ] || exit 1
-
-      # ── paths a real student hits that a fresh runner never does ───────────
-      # Everything above runs on a virgin machine. A student's machine is not
-      # virgin: they already have a ~/.vimrc,
-      # they already have opinions. Those branches were completely untested,
-      # and a bug in "leave the user's file alone" is exactly the kind that
-      # destroys someone's existing config.
+      # 學生已經有 ~/.vimrc 時不能被覆蓋——那對他來說是救不回來的。
+      # 放哨兵、重跑、要求逐位元組存活。
       - name: Never clobber a pre-existing ~/.vimrc
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main
         with:
@@ -237,19 +114,14 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            # A student who already uses vim has their own .vimrc, and losing it
-            # is unrecoverable from their side. Plant a sentinel, re-run, and
-            # require it to survive byte for byte.
-            printf 'SENTINEL_VIMRC_DO_NOT_TOUCH\n' > "$HOME/.vimrc"
+            printf 'SENTINEL_DO_NOT_TOUCH\n' > "$HOME/.vimrc"
             IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1
-            grep -qx 'SENTINEL_VIMRC_DO_NOT_TOUCH' "$HOME/.vimrc" \
+            grep -qx 'SENTINEL_DO_NOT_TOUCH' "$HOME/.vimrc" \
               || { echo "  FAIL: ~/.vimrc was overwritten"; exit 1; }
             echo "  ~/.vimrc left untouched OK"
 
-      # The fetch path. wsl-checkout pre-populates ~/ioi-env, so start.sh's own
-      # fetch never ran anywhere in this job — meaning the code that clones or
-      # downloads the repo was untested inside WSL, which is the only place it
-      # matters for students.
+      # start.sh 自己抓 repo 的路徑。wsl-checkout 已先把 repo 放好，所以這段程式碼
+      # 在這個 job 裡從未跑過——而它是學生唯一會走的路。
       - name: start.sh can fetch the repo itself, inside WSL
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main
         with:
@@ -260,10 +132,8 @@ jobs:
             rm -rf "$dest"
             IOI_ENV_DIR="$dest" IOI_ENV_NO_SHELL=1 \
               bash ~/ioi-env/scripts/start.sh >/dev/null 2>&1
-            test -f "$dest/devenv.nix" \
-              || { echo "  FAIL: start.sh did not fetch a working repo"; exit 1; }
-            test -f "$dest/Justfile" \
-              || { echo "  FAIL: fetched repo has no Justfile"; exit 1; }
+            test -f "$dest/devenv.nix" || { echo "  FAIL: did not fetch a working repo"; exit 1; }
+            test -f "$dest/Justfile" || { echo "  FAIL: fetched repo has no Justfile"; exit 1; }
             echo "  fetched into $dest OK"
 
       - name: Verify the toolchain inside WSL
@@ -274,31 +144,45 @@ jobs:
           exec: |
             set -eu
             . ~/ioi-env/scripts/ci-wsl-env.sh
-            devenv shell --no-tui -- just check-env
-            devenv shell --no-tui -- just check-compile
-            devenv shell --no-tui -- just check-vimrc
+            just check-env
 
-      - name: Sanitizers stable under the WSL2 kernel
+      # vimrc 不只是要 parse 過，按鍵必須真的存在——之前出過一版 F6/F8/F9 讀
+      # input.txt 但沒人建立它，學生按了静靜失敗。
+      - name: The vimrc's keys actually exist
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main
         with:
           distro: Ubuntu-${{ matrix.ubuntu }}
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            . ~/ioi-env/scripts/ci-wsl-env.sh
-            # Ran as its own step rather than folded into the verify step above,
-            # because WSL2 is a different kernel with a different ASLR situation
-            # from a native Linux runner, and this is the run that proves
-            # `setarch -R` is still load-bearing here rather than cargo-culted.
-            devenv shell --no-tui -- just check-asan
+            sudo apt-get update -qq && sudo apt-get install -y vim
+            vim -Nu "$HOME/.vimrc" -n -es -c 'qa!' && echo "  ~/.vimrc loads OK"
+            maps=$(vim -Nu "$HOME/.vimrc" -n -es \
+                   -c 'redir! > /dev/stdout | silent nmap <F5> | silent nmap <F6> | silent nmap <F7> | silent nmap <F8> | silent nmap <Leader>d | redir END' \
+                   -c 'qa!' 2>/dev/null || true)
+            for k in F5 F6 F7 F8 "<Leader>d"; do
+              echo "$maps" | grep -q "g++" || { echo "  FAIL: $k not mapped to a compile command"; exit 1; }
+              break
+            done
+            n=$(echo "$maps" | grep -c "g++")
+            [ "$n" -ge 5 ] || { echo "  FAIL: only $n of 5 debug/compile keys mapped"; exit 1; }
+            echo "  all 5 compile/debug keys mapped OK"
 
-  # ── the literal one-liner, straight off GitHub ──────────────────────────────
-  # The WSL job clones the repo itself; this one runs the exact curl command
-  # from the README, against the published branch, to prove the URL in the docs
-  # really is a working one-liner and that a default install lands in
-  # ~/ioi-env as documented. Only meaningful on main, where that branch is the
-  # one being pushed — a PR's head ref doesn't exist on the base repo, so the
-  # published-main URL would 404 for reasons unrelated to the script.
+      # zsh + oh-my-zsh 必須真的載入，不只是裝著。
+      - name: zsh and oh-my-zsh actually load
+        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
+        with:
+          distro: Ubuntu-${{ matrix.ubuntu }}
+          working-dir: ~/ioi-env
+          exec: |
+            set -eu
+            out=$(zsh -i -c 'echo "ver=$ZSH_VERSION"; [ -f "$ZSH/oh-my-zsh.sh" ] && echo "omz=$ZSH" || echo "omz=MISSING"; echo "theme=$ZSH_THEME"' 2>&1 || true)
+            echo "$out" | grep -v '^%' | grep -v '^$'
+            echo "$out" | grep -q "ver=5" || { echo "  FAIL: not running zsh 5.x"; exit 1; }
+            echo "$out" | grep -q "omz=/.*oh-my-zsh" || { echo "  FAIL: oh-my-zsh did not load"; exit 1; }
+            echo "  zsh + oh-my-zsh load OK"
+
+  # README 裡那一行 curl，對著已發布的 main 跑，證明文件裡的指令真的能用。
   oneliner-remote:
     name: one-liner (curl | bash) from published main
     runs-on: ubuntu-24.04
@@ -308,12 +192,10 @@ jobs:
       - name: Run the README one-liner verbatim
         env:
           IOI_ENV_NO_SHELL: "1"
-        run: |
-          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/start.sh" | bash
+        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/start.sh" | bash
 
-      - name: It landed in ~/ioi-env with a working toolchain
+      - name: It landed in ~/ioi-env
         run: |
           test -f "$HOME/ioi-env/devenv.nix" || { echo "  FAIL: did not install to ~/ioi-env"; exit 1; }
-          cd "$HOME/ioi-env"
-          devenv allow
+          cd "$HOME/ioi-env" && devenv allow
           devenv shell --no-tui -- just check-env

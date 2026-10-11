@@ -1,0 +1,16 @@
+# ioi-env — zsh + oh-my-zsh
+# 只在 ~/.zshrc 不存在時安裝；你已有的絕對不動。
+
+# oh-my-zsh 從 devenv profile 找（路徑穩定，不會隨 nix store 更新而失效）
+if [ -n "$DEVENV_ROOT" ] && [ -d "$DEVENV_ROOT/.devenv/profile/share/oh-my-zsh" ]; then
+  export ZSH="$DEVENV_ROOT/.devenv/profile/share/oh-my-zsh"
+  export ZSH_THEME="robbyrussell"
+  plugins=(git)
+  ZSH_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/oh-my-zsh"
+  mkdir -p "$ZSH_CACHE_DIR"
+  source "$ZSH/oh-my-zsh.sh"
+fi
+
+# 完成競賽環境的捷徑別名
+alias g++13='g++'
+alias a='./a'

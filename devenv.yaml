@@ -1,17 +1,8 @@
 inputs:
-  # 釘到 NixOS 25.05 stable，不是 rolling。原因只有一個：這個版本剛好給
-  #   gcc13 = 13.3.0   ← 簡章 Compiler
-  #   vim   = 9.1.1336 ← 簡章 Editor
-  # rolling 目前是 gcc13 13.4.0 / vim 9.2，patch 級雖不影響 C++17 行為，但
-  # 「和賽場同一版」是這個專案存在的理由，寧可釘舊一點的 stable。
-  # 25.11 已經把 gcc13 升到 13.4.0、26.05 把 vim 升到 9.2，都偏離簡章。
   nixpkgs:
     url: github:NixOS/nixpkgs/25.05
 
 require_version: ">=2.1.2"
 
-# 釘死 bash。不指定的話 devenv 沿用機器的 $SHELL，學生裝了 zsh/nushell/fish
-# 就拿到不同 shell，而他們的 shell rc 可能把 PATH 弄壞（實測過：本機 nushell
-# config 讀 $env.HOME 失敗 → mktemp 找不到 → devenv shell 直接炸）。
-# 另一個理由：競賽環境就是 bash，本地練的 shell 該和賽場一致。
-shell: bash
+# 讓 `devenv shell` 進到 zsh。
+shell: zsh

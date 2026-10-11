@@ -5,126 +5,28 @@ _default:
 # student-facing
 # ══════════════════════════════════════════════════════════════════
 
-# one-time host setup: vimrc + Windows-side .wslconfig
+# 一次性：裝 vimrc。這是本專案**唯一**會寫進你家目錄的檔案，
+# 而且只在你沒有的時候寫；已有的絕對不動。
 bootstrap:
     #!/usr/bin/env bash
-    set -uo pipefail
+    set -euo pipefail
     root="$(cd "$(dirname "{{justfile()}}")" && pwd)"
-    fail=0
 
-    echo "── vimrc ──"
     if [ -f "$HOME/.vimrc" ]; then
-      echo "  $HOME/.vimrc already exists — leaving it alone"
-      echo "  (shipped one is at $root/deploy/vimrc)"
+      echo "  ~/.vimrc already exists — leaving it alone"
+      echo "  (shipped one: $root/deploy/vimrc)"
     else
       cp "$root/deploy/vimrc" "$HOME/.vimrc"
-      echo "  installed $HOME/.vimrc — no plugins, F5 = g++ -O2 -std=c++17 -Wall"
+      echo "  installed ~/.vimrc — no plugins, F5 = g++ -O2 -std=c++17 -Wall"
     fi
 
-    # ── how much RAM to give WSL ──
-    # Ask the host, never assume. A hard-coded 8GB is fine on a 16GB desktop and
-    # a quiet disaster on a 4GB laptop: WSL takes it, Windows gets nothing, and
-    # the machine thrashes during a compile. Queried through PowerShell's CIM
-    # rather than `wmic`, which is deprecated and may not be present on newer
-    # Windows images. Falls back to a conservative 2GB rather than guessing high.
-    ps=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
-    total=""
-    if [ -x "$ps" ]; then
-      total=$("$ps" -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory" 2>/dev/null \
-              | tr -d '\r' | grep -E '^[0-9]+$' | head -1 || true)
-    fi
-
-    if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
-      total_gb=$(( total / 1024 / 1024 / 1024 ))
-      half_gb=$(( total_gb / 2 ))
-      # Half the host, clamped: at most 8GB (nothing here needs more), at least
-      # 2GB (below that g++ starts swapping on a moderately large test).
-      if   [ "$half_gb" -gt 8 ]; then mem_gb=8GB
-      elif [ "$half_gb" -lt 2 ]; then mem_gb=2GB
-      else mem_gb="${half_gb}GB"; fi
-      echo "  host RAM: ${total_gb}GB → WSL memory cap: ${mem_gb} (half, clamped to [2GB, 8GB])"
-    else
-      mem_gb=2GB
-      echo "  could not read host RAM through interop — defaulting to ${mem_gb}"
-      echo "  (merge your own value into .wslconfig if you know better)"
-    fi
-
-    # WSL by default exposes every host core, which is more than a build needs
-    # and more than Windows can spare while it also runs. Cap it.
-    procs=4
-    if [ -x "$ps" ]; then
-      logical=$("$ps" -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors" 2>/dev/null \
-                | tr -d '\r' | grep -E '^[0-9]+$' | head -1 || true)
-      if [ -n "$logical" ] && [ "$logical" -gt 0 ] 2>/dev/null && [ "$logical" -lt 4 ]; then
-        procs=$logical
-      fi
-    fi
-
-    echo "── .wslconfig ──"
-    win_profile=""
-    if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || [ -d /mnt/c/Windows ]; then
-        if [ -x /mnt/c/Windows/System32/cmd.exe ]; then
-            u=$(/mnt/c/Windows/System32/cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r' || true)
-            [ -n "$u" ] && [ -d "/mnt/c/Users/$u" ] && win_profile="/mnt/c/Users/$u"
-        fi
-    fi
-
-    if [ -z "$win_profile" ]; then
-        echo "  not WSL, or Windows profile not found — nothing to do"
-    elif [ -f "$win_profile/.wslconfig" ]; then
-        echo "  $win_profile/.wslconfig already exists — leaving it alone"
-        echo "  the values this script would have written:"
-        echo "      memory=$mem_gb processors=$procs (see above)"
-    else
-        # printf, not a heredoc: heredoc bodies inside a just recipe inherit the
-        # recipe's indentation and WSL wants a clean INI. Written from Linux so
-        # there is no BOM and no CRLF either — either one makes WSL silently
-        # ignore the ENTIRE file.
-        printf '[wsl2]\nmemory=%s\nprocessors=%s\nswap=0\nlocalhostForwarding=true\n' \
-            "$mem_gb" "$procs" > "$win_profile/.wslconfig"
-        echo "  wrote $win_profile/.wslconfig (memory=$mem_gb processors=$procs swap=0)"
-        echo "  derived from the host's ${total_gb}GB RAM — see the note above"
-        echo "  takes effect after: wsl --shutdown  (run from cmd, then reopen)"
-    fi
-
-    echo ""
-    echo "── remaining steps need sudo (run once) ──"
-    cat <<'EOS'
-    WSL appends the whole Windows PATH into Linux, dragging find.exe / sort.exe
-    along. Anything you type that collides with a Windows command silently runs
-    the Windows one. Turn it off, then restart WSL:
-
-        sudo tee /etc/wsl.conf >/dev/null <<'WEOF'
-        [boot]
-        systemd=true
-
-        [interop]
-        appendWindowsPath=false
-
-        [automount]
-        enabled=true
-        options="metadata,umask=22,fmask=11"
-        WEOF
-
-    And make the clock UTC+8 so contest start times line up:
-
-        sudo ln -sf /usr/share/zoneinfo/Asia/Taipei /etc/localtime
-        echo "Asia/Taipei" | sudo tee /etc/timezone
-
-    Then, from cmd:  wsl --shutdown   and reopen.
-    EOS
-
-    echo ""
-    echo "bootstrap done. 下一步: just check-env"
-    [ "$fail" = 0 ]
-
-# enter the student shell
+# enter the toolchain
 shell:
     devenv shell
 
-# run every verification recipe (what the pre-push hook also runs)
-prepush:
-    just lint check-env check-compile check-vimrc check-asan
+# run every verification recipe
+prepush: lint check-vimrc check-env check-compile check-asan
+    @echo "  all verification passed"
 
 # jj users run this before pushing, because `jj git push` bypasses git hooks
 prepush-jj: prepush
@@ -133,16 +35,19 @@ prepush-jj: prepush
     echo "  local checks passed — safe to run:"
     echo "      jj git push --bookmark main"
 
+# run every verification recipe
+verify: prepush
+    @echo "  all verification passed"
+
 # update the pinned nixpkgs input (only when you mean to)
 update:
     devenv update
 
 # ══════════════════════════════════════════════════════════════════
-# verification — the same recipes CI and the pre-push hook run,
-# so there is exactly one copy of every rule
+# verification — CI 和 pre-push hook 跑同一份，規則只有一處
 # ══════════════════════════════════════════════════════════════════
 
-# versions, missing tools, and the std-guard
+# 編譯器釘子 + 遺失工具
 check-env:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -157,24 +62,20 @@ check-env:
     }
 
     echo "ioi-env — competition alignment"
-    echo "  compiler: gcc/g++ 13.3.0 · C++17 · vim 9.1  (nixpkgs 25.05 pin)"
-    echo "  OS is whatever 'wsl --install -d Ubuntu-24.04' gives — see README"
-    chk g++  "$(g++ -dumpversion 2>/dev/null || echo missing)" "13.3"
-    chk vim  "$(vim --version 2>/dev/null | head -1 | awk '{print $5}' || echo missing)" "9.1"
-    chk make "$(make --version 2>/dev/null | head -1 | awk '{print $3}' || echo missing)" "4"
-    for c in gdb python3 diff timeout; do
+    echo "  gcc/g++ 13.3.0 · C++17 · vim 9.1  (compiler nix-pinned, rest from the distro)"
+    chk g++ "$(g++ -dumpversion 2>/dev/null || echo missing)" "13.3"
+    chk vim "$(vim --version 2>/dev/null | head -1 | awk '{print $5}' || echo missing)" "9.1"
+
+    for c in python3 diff; do
       if command -v "$c" >/dev/null 2>&1; then
         printf '  %-10s ok\n' "$c"
       else
         printf '  %-10s MISSING\n' "$c"; fail=1
       fi
     done
-    # `time` is deliberately NOT in that list. /usr/bin/time lives in the nix
-    # `time` package, but `command -v time` also finds bash's builtin, so the
-    # check would pass on a machine where the real binary is missing — a check
-    # that cannot fail is worse than no check. check-compile uses it by absolute
-    # path instead.
 
+    # 真正的守門員。<print> 是 C++23：judge 的 gcc 13.3 不接受，我們也不准接受。
+    # 它一旦編過就代表釘子漂了，學生在練 judge 會拒收的東西。
     t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
     printf '#include <print>\nint main(){ std::println("x"); }\n' > "$t/cpp23.cpp"
     if g++ -O2 -std=c++17 "$t/cpp23.cpp" -o "$t/cpp23" 2>/dev/null; then
@@ -186,7 +87,7 @@ check-env:
 
     if [ "$fail" = 0 ]; then echo "  all good"; else echo "  ENV DRIFTED — re-check devenv.yaml / devenv.nix"; exit 1; fi
 
-# C++17 compiles and runs; C++23 is rejected
+# C++17 編得過也跑得動；C++23 必須被拒
 check-compile:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -214,7 +115,7 @@ check-compile:
     fi
     echo "  C++23 correctly rejected OK"
 
-# sanitizers must be deterministic, or students chase bugs that are not theirs
+# sanitizer 必須穩定，否則學生會去追不是自己的 bug
 check-asan:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -224,8 +125,8 @@ check-asan:
     int main() { int n; std::cin >> n; std::cout << n * 2 << '\n'; }
     CPP
     g++ -g -O1 -std=c++17 -fsanitize=address,undefined "$t/a.cpp" -o "$t/a_san"
-    # setarch -R is load-bearing: nix's ASan runtime intermittently fails to
-    # mmap under high-entropy ASLR (measured 6/30 silent SEGVs, no ASan output).
+    # setarch -R 是必要的：nix 的 ASan runtime 在高 ASLR 位址下偶發 mmap 失敗，
+    # 實測 30 次有 6 次靜默 SEGV（沒有任何 ASan 訊息，輸出是空的）。
     bad=0
     for _ in $(seq 1 20); do
       [ "$(echo 5 | setarch "$(uname -m)" -R "$t/a_san" 2>/dev/null)" = "10" ] || bad=$((bad+1))
@@ -236,7 +137,7 @@ check-asan:
       echo "  ASan failed $bad/20 runs"; exit 1
     fi
 
-# the shipped vimrc must parse cleanly under the pinned vim
+# 出貨的 vimrc 必須能在釘住的 vim 下乾淨載入
 check-vimrc:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -249,49 +150,39 @@ check-vimrc:
     grep -q 'std=c++17' deploy/vimrc || { echo "  FAIL: vimrc no longer targets C++17"; exit 1; }
     grep -q 'setarch' deploy/vimrc || { echo "  FAIL: vimrc dropped the setarch -R guard"; exit 1; }
 
-# static lint of the shell scripts and the workflow (skips cleanly if absent)
+# 靜態檢查 shell 腳本與 workflow（工具不在就乾淨跳過）
 lint:
     #!/usr/bin/env bash
     set -uo pipefail
     if command -v shellcheck >/dev/null 2>&1; then
-      # -s sh: POSIX sh, not bash. The script runs under dash on Ubuntu, so
-      # bash-only constructs would pass here and die on a student's machine.
-      # Both scripts, not just start.sh — ci-wsl-env.sh is shell code too and
-      # used to go unchecked.
+      # -s sh：POSIX sh，不是 bash。腳本在 Ubuntu 上用 dash 跑，bash-only 寫法
+      # 在這裡會過、在學生機器上會死。
       shellcheck -s sh scripts/start.sh scripts/ci-wsl-env.sh && echo "  shell scripts lint OK"
     else
       echo "  shellcheck not installed — skipped (devenv.local.nix adds it)"
     fi
     if command -v yamllint >/dev/null 2>&1; then
-      # -d relaxed: the default config treats long lines as errors, which is
-      # wrong for a workflow whose comments carry the reasoning.
+      # -d relaxed：預設設定把長行當錯誤，但這個 workflow 的論證都寫在註解裡。
       yamllint -d relaxed -d "{extends: relaxed, rules: {line-length: disable}}" \
         .github/workflows/ci.yml && echo "  ci.yml yamllint OK"
     else
-      echo "  yamllint not installed — skipped (devenv.local.nix adds it)"
+      echo "  yamllint not installed — skipped"
     fi
     if command -v actionlint >/dev/null 2>&1; then
-      # actionlint carries the real GitHub Actions schema plus semantic checks
-      # YAML parsing cannot do. It earned its place immediately: it caught a
-      # job-level `env:` using the `runner` context (only
-      # github/inputs/matrix/needs/secrets/strategy/vars are legal there) and
-      # an unknown runner label — either one makes the whole workflow fail to
-      # parse with zero jobs created, which surfaces as "workflow file issue"
-      # and tells you nothing about which line is wrong.
+      # actionlint 帶真的 GitHub Actions schema + 語意檢查，YAML 解析做不到的
+      # 它做得到：它抓過 job-level env 用了 runner context、job name 含 ": "、
+      # step 混用 run: 與 parallel: —— 任一個都讓整個 workflow 零 job 失敗，
+      # 而 GitHub 只告訴你 "workflow file issue"，不給行號。
       actionlint .github/workflows/ci.yml && echo "  ci.yml actionlint OK"
     else
       echo "  actionlint not installed — skipped (devenv.local.nix adds it)"
     fi
 
-# run every verification recipe (what the pre-push hook also runs)
-verify: lint check-vimrc check-env check-compile check-asan
-    @echo "  all verification passed"
-
 # ══════════════════════════════════════════════════════════════════
-# maintainer — one-time local setup, not part of the student path
+# maintainer — 學生不需要
 # ══════════════════════════════════════════════════════════════════
 
-# install the git hooks (lefthook, from devenv.local.nix)
+# 安裝 git hooks（lefthook，來自 devenv.local.nix）
 hooks:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -301,10 +192,8 @@ hooks:
     fi
     devenv shell --no-tui -- lefthook install
 
-# teach this jj repo to run the pre-push checks before `jj git push`.
-# `jj git push` does not run git hooks, so without this a push silently skips
-# them. The alias lands in .jj/repo/config.toml — local only — which is why it
-# is set per clone instead of committed.
+# 讓這個 jj repo 在 `jj git push` 前先跑檢查。
+# `jj git push` 不跑 git hooks，沒有這個別名的話推送會整個跳過驗證。
 jj-setup:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -313,7 +202,7 @@ jj-setup:
       '["util", "exec", "--", "bash", "-c", "devenv shell --no-tui -- lefthook run pre-push && jj git push \"$@\"", ""]'
     echo "  jj push now runs the pre-push checks first"
 
-# both hook paths: lefthook directly, and the jj alias's check step
+# 兩條 hook 路徑都驗一次
 check-hooks: hooks jj-setup
     #!/usr/bin/env bash
     set -euo pipefail

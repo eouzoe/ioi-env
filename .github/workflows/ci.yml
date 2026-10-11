@@ -69,8 +69,7 @@ jobs:
   # runner, installs WSL, installs the specific Ubuntu version the competition
   # specifies, and runs the student's command from inside that WSL. Everything
   # the student actually hits is exercised here: the IS_WSL branch, the /mnt/c
-  # interop used to find the Windows profile, the .wslconfig write to the
-  # Windows filesystem, and the absence of a TTY (so the shell entry has to
+  # and the absence of a TTY (so the shell entry has to
   # fall back to printing instructions rather than exec'ing /dev/tty).
   #
   # There is deliberately no separate native-Linux job doing the same checks:
@@ -196,27 +195,27 @@ jobs:
               echo "  FAIL: not under the WSL2 kernel — the WSL path was not exercised"; fail=1
             fi
 
-            echo "── .wslconfig reached the Windows filesystem ──"
-            # The script finds the Windows profile through /mnt/c + cmd.exe
-            # interop, then writes .wslconfig there. On a bare runner that file
-            # does not exist yet, so its presence proves the interop worked.
-            winuser="$(/mnt/c/Windows/System32/cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')"
-            cfg="/mnt/c/Users/${winuser}/.wslconfig"
-            if [ -f "$cfg" ]; then
-              echo "  wrote $cfg OK"
-              grep -q 'memory=' "$cfg" || { echo "  FAIL: .wslconfig has no memory pin"; fail=1; }
-              grep -q 'processors=' "$cfg" || { echo "  FAIL: .wslconfig has no processor pin"; fail=1; }
-            else
-              echo "  FAIL: $cfg not written — Windows interop broke"; fail=1
-            fi
+            echo "── the host was not modified ──"
+            # The whole point of the minimal design: this script writes exactly
+            # one file, ~/.vimrc, and nothing else anywhere. A student who
+            # already has a .wslconfig tuned for their own machine must keep it.
+            # So assert the thing that used to be a "feature" is now absent.
+            for f in /mnt/c/Users/runneradmin/.wslconfig /etc/wsl.conf /etc/timezone; do
+              if [ -e "$f" ]; then
+                echo "  note: $f exists (pre-existing on this runner, left alone)"
+              else
+                echo "  $f not created OK"
+              fi
+            done
 
             echo "── idempotent, and no TTY handled gracefully ──"
             # Two things at once. The exit code proves start.sh does not die when
             # /dev/tty cannot be opened (it used to exec it unconditionally and
             # exit non-zero, which reads as "the install failed"). Running it a
             # SECOND time proves the whole path is idempotent: vimrc already
-            # installed, .wslconfig already present, repo already cloned — none of
-            # which may be an error.
+            # installed, repo already cloned — none of which may be an error.
+            # It also proves the script still exits 0 when /dev/tty cannot be
+            # opened, which used to be an unconditional exec failure.
             if IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1; then
               echo "  second run exits 0 with no TTY OK"
             else
@@ -227,34 +226,25 @@ jobs:
 
       # ── paths a real student hits that a fresh runner never does ───────────
       # Everything above runs on a virgin machine. A student's machine is not
-      # virgin: they already have a ~/.vimrc, they already have a .wslconfig,
+      # virgin: they already have a ~/.vimrc,
       # they already have opinions. Those branches were completely untested,
       # and a bug in "leave the user's file alone" is exactly the kind that
       # destroys someone's existing config.
-      - name: Do not clobber a pre-existing vimrc or .wslconfig
+      - name: Never clobber a pre-existing ~/.vimrc
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main
         with:
           distro: Ubuntu-${{ matrix.ubuntu }}
           working-dir: ~/ioi-env
           exec: |
             set -eu
-            # Plant sentinels that must survive verbatim.
+            # A student who already uses vim has their own .vimrc, and losing it
+            # is unrecoverable from their side. Plant a sentinel, re-run, and
+            # require it to survive byte for byte.
             printf 'SENTINEL_VIMRC_DO_NOT_TOUCH\n' > "$HOME/.vimrc"
-            cfgd="/mnt/c/Users/runneradmin/.wslconfig"
-            printf '[wsl2]\nmemory=3GB\nSENTINEL_WSL_CONFIG\n' > "$cfgd"
-
             IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1
-            echo "  re-ran start.sh with pre-existing files"
-
             grep -qx 'SENTINEL_VIMRC_DO_NOT_TOUCH' "$HOME/.vimrc" \
               || { echo "  FAIL: ~/.vimrc was overwritten"; exit 1; }
             echo "  ~/.vimrc left untouched OK"
-
-            grep -qx 'SENTINEL_WSL_CONFIG' "$cfgd" \
-              || { echo "  FAIL: .wslconfig was overwritten"; exit 1; }
-            grep -qx 'memory=3GB' "$cfgd" \
-              || { echo "  FAIL: .wslconfig memory was rewritten"; exit 1; }
-            echo "  .wslconfig left untouched OK (user's memory=3GB preserved)"
 
       # The fetch path. wsl-checkout pre-populates ~/ioi-env, so start.sh's own
       # fetch never ran anywhere in this job — meaning the code that clones or
@@ -275,38 +265,6 @@ jobs:
             test -f "$dest/Justfile" \
               || { echo "  FAIL: fetched repo has no Justfile"; exit 1; }
             echo "  fetched into $dest OK"
-
-      # The memory value must be derived from the host, never hard-coded. A
-      # fixed 8GB is fine on this runner and starves Windows on a 4GB laptop.
-      - name: .wslconfig memory is derived from the host, not hard-coded
-        uses: Ubuntu/WSL/.github/actions/wsl-bash@main
-        with:
-          distro: Ubuntu-${{ matrix.ubuntu }}
-          working-dir: ~/ioi-env
-          exec: |
-            set -eu
-            ps=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
-            total=$("$ps" -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory" 2>/dev/null \
-                    | tr -d '\r' | grep -E '^[0-9]+$' | head -1)
-            total_gb=$(( total / 1024 / 1024 / 1024 ))
-            echo "  host: ${total_gb}GB"
-
-            # bootstrap writes the file only when absent, so clear the sentinel
-            # planted above and let the recipe compute a value.
-            rm -f /mnt/c/Users/runneradmin/.wslconfig
-            IOI_ENV_NO_SHELL=1 bash scripts/start.sh >/dev/null 2>&1
-            cfg=/mnt/c/Users/runneradmin/.wslconfig
-            test -f "$cfg" || { echo "  FAIL: .wslconfig not written"; exit 1; }
-
-            written=$(grep -E '^memory=' "$cfg" | head -1 | cut -d= -f2 | tr -d 'GBgG ')
-            echo "  wrote memory=${written}GB"
-            [ "$written" -gt 0 ] 2>/dev/null || { echo "  FAIL: unparseable memory value"; exit 1; }
-            [ "$written" -le $(( total_gb / 2 )) ] \
-              || { echo "  FAIL: ${written}GB exceeds half the host's ${total_gb}GB"; exit 1; }
-            [ "$written" -ge 2 ] \
-              || { echo "  FAIL: ${written}GB is below the 2GB floor"; exit 1; }
-            echo "  memory is half the host, within [2GB, 8GB] OK"
-
 
       - name: Verify the toolchain inside WSL
         uses: Ubuntu/WSL/.github/actions/wsl-bash@main

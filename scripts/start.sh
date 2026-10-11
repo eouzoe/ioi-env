@@ -12,10 +12,15 @@
 #
 # This script deliberately does as little as possible: its whole job is to get
 # Nix, devenv, and this repo onto the machine, then hand off to `just`. Every
-# piece of actual setup — vimrc, .wslconfig, host steps, verification — lives in
-# the Justfile, which means CI, the pre-push hook, and the student all run the
-# exact same code. Only three things genuinely cannot live there: installing
-# Nix, installing devenv, and fetching the repo that contains the Justfile.
+# piece of actual setup lives in the Justfile, which means CI, the pre-push
+# hook, and the student all run the exact same code. Only three things genuinely
+# cannot live there: installing Nix, installing devenv, and fetching the repo
+# that contains the Justfile.
+#
+# It also never touches the host's own configuration. No .wslconfig — that file
+# belongs to the student, and their machine needs different values than ours
+# could guess. No /etc/wsl.conf, no timezone, no apt, no daemon. The single file
+# written outside this repo is ~/.vimrc, and only if the student has none yet.
 #
 # Overridable via env:
 #   IOI_ENV_REPO        repo to clone (default: the one hosting this script)
@@ -136,16 +141,19 @@ fi
 [ -f "$DEST/Justfile" ]   || die "$DEST has no Justfile — fetch failed"
 
 # ── 4. hand off to `just` ────────────────────────────────────────────────────
-# Everything from here — vimrc, .wslconfig, the sudo-only host steps, all the
-# verification — is a Justfile recipe. Run the same ones CI runs.
+# Everything from here is a Justfile recipe, so CI and the student run the same
+# code. There is deliberately nothing else: no .wslconfig (that file is the
+# student's, and their machine needs different values), no /etc/wsl.conf, no
+# timezone. The only file this ever writes is ~/.vimrc, and only when absent.
 
 head1 "setup"
 
 cd "$DEST"
 devenv allow
 
-# First entry downloads nixpkgs plus every package; on a cold cache this is the
-# slow part, so say so instead of looking hung.
+# First entry downloads nixpkgs plus gcc13; on a cold cache this is the slow
+# part, so say so instead of looking hung. It is the only real download — vim,
+# python3, git, diff and time all come from the WSL image already.
 log "downloading the pinned toolchain (nixpkgs 25.05) — this is the slow part"
 log ""
 devenv shell --no-tui -- just bootstrap

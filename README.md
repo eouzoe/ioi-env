@@ -1,8 +1,6 @@
 # ioi-env
 
-One command to a competition-matching development environment.
-
-## Install
+One command to a competition-matching compiler.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eouzoe/ioi-env/main/scripts/start.sh | bash
@@ -11,83 +9,77 @@ curl -fsSL https://raw.githubusercontent.com/eouzoe/ioi-env/main/scripts/start.s
 ## What you get
 
 Pinned to the competition spec (臺北市 115 學年度資訊學科能力競賽實施計畫,
-附件一第 10 點) via nixpkgs 25.05:
+附件一第 10 點):
 
-| | Spec | Here |
+| | Spec | Where it comes from |
 |---|---|---|
-| Compiler | gcc/g++ **13.3.0** | `gcc13` = 13.3.0 |
-| Language | C++17 | `-std=c++17` |
-| Editor | vim **9.1** | `vim` = 9.1.1336 |
+| Compiler | gcc/g++ **13.3.0** | nixpkgs pin — the one thing that must not drift |
+| Language | C++17 | the compiler above |
+| Editor | vim **9.1** | already in the WSL image (9.1.0016, exactly the spec) |
 
-The compiler and editor pins are **exact**, not approximate — nixpkgs 25.05
-happens to ship exactly those versions (rolling gives 13.4.0 / vim 9.2, and
-25.11 already moved gcc13). `devenv.yaml` names the release so the choice is
-deliberate and reviewable.
+Everything else you need comes with the WSL image and is **not** re-downloaded:
+`vim 9.1`, `python3`, `git`, `diffutils`, `time`. `gcc`/`g++` is the only thing
+Ubuntu 24.04's WSL rootfs does not ship at all, so it is the only thing installed
+— and installing it means pinning it, because Ubuntu LTS `-updates` will move
+gcc 13.x under you (`apt install g++` gives 13.3.0 today and 13.4.0 later).
 
-`just check-env` fails loudly if any of it drifts, including a guard that
+`just check-env` fails loudly if the pin drifts, including a guard that
 `<print>` (C++23) must **not** compile — the one drift that would silently
 teach code the judge rejects.
 
-### About the OS version — what the spec says vs. what you will get
+## It writes one file
 
-The spec names **Ubuntu 24.04.2**. A student who runs
-`wsl --install -d Ubuntu-24.04` gets whatever Canonical last published to the
-Store, which today is 24.04**.5** — not .2.
+`~/.vimrc`, and only if you do not already have one. Yours is never touched.
 
-That is not a shortcoming of this setup, it is not avoidable:
+It deliberately writes **nothing else on your machine**:
 
-- The Store's `Ubuntu-24.04` appx has no version selector. There is no
-  `wsl --install -d Ubuntu-24.04.2`.
-- `cloud-images.ubuntu.com/wsl/releases/noble/` publishes exactly two images
-  per series: the original dated build (`20240423/`, i.e. 24.04.**0**) and
-  `current/`. There is no .2 snapshot.
-- Canonical's own `release-info` tooling (used by their `download-rootfs`
-  GitHub action) has `--rootfs <arch>` and no version flag either, so the
-  official path cannot pin a point release.
+- **no `.wslconfig`.** That file is yours, tuned for your RAM and CPU, and a
+  script cannot know your numbers. Writing one, or editing yours, is how you end
+  up with a machine that cannot boot Windows.
+- **no `/etc/wsl.conf`**, no `appendWindowsPath=false`, no timezone change,
+  no `apt`, no background service.
 
-**And it does not matter.** The judge compiles with *its* gcc 13.3.0. What has
-to match is the compiler, and the compiler here comes from the nixpkgs pin —
-not from apt, not from the distro. Same for vim. Point releases within a series
-carry the same kernel ABI and the same package set for anything this
-environment uses, so the only thing that would change by chasing 24.04.2 is the
-`lsb_release` string.
-
-So: install with `wsl --install -d Ubuntu-24.04`, accept whatever point
-release it gives, and let `just check-env` guard the versions that actually
-affect submissions.
-
-## Layout
-
-```
-scripts/start.sh       bootstrap: Nix + devenv + fetch this repo, then hands to `just`
-Justfile               all setup and verification recipes
-deploy/vimrc           contest-grade vimrc → installed to ~/.vimrc
-devenv.nix             pinned toolchain
-devenv.yaml            nixpkgs 25.05 pin, shell: bash
-lefthook.yml           pre-push checks (git)
-scripts/ci-wsl-env.sh  CI-only: puts devenv on PATH inside a fresh WSL step
-.github/workflows/ci.yml
-```
-
-`start.sh` does only the three things it must — install Nix, install devenv,
-fetch the repo that contains the Justfile. Everything else is a `just` recipe,
-so the student, CI, and the pre-push hook run identical code.
+The compiler lives in a Nix store outside your filesystem; removing the project
+directory is the entire uninstall.
 
 ## Usage
 
 ```bash
-just bootstrap      # one-time: vimrc + .wslconfig (prints the sudo-only steps)
-just check-env      # versions + std-guard
-just verify         # everything
+just bootstrap      # one-time: installs ~/.vimrc if absent
+just check-env      # compiler pin + std-guard
 devenv shell        # enter the toolchain
 ```
 
 vim keys: `F5` compile+run, `F6` with `< input.txt`, `F7` syntax-only,
 `F8` sanitizers, `F9` `/usr/bin/time -v`.
 
-`F8` runs under `setarch -R`, which is load-bearing: nix's ASan runtime
+`F8` runs under `setarch -R`, which is load-bearing: Nix's ASan runtime
 intermittently fails to mmap under high-entropy ASLR (measured 6/30 silent
 SEGVs). `just check-asan` runs it 20 times and fails if it is not stable.
+
+## About the OS version
+
+The spec names **Ubuntu 24.04.2**. `wsl --install -d Ubuntu-24.04` installs
+whatever Canonical last published, which is 24.04.5 today — there is no version
+selector on the Store appx, no 24.04.2 snapshot on
+`cloud-images.ubuntu.com/wsl/releases/noble/` (only `20240423/` = 24.04.0 and
+`current/`), and no version flag in Canonical's own tooling.
+
+It does not matter: the judge compiles with *its* gcc 13.3.0, and ours is
+Nix-pinned rather than taken from the distro.
+
+## Layout
+
+```
+scripts/start.sh       Nix + devenv + fetch this repo, then hand to `just`
+Justfile               all setup and verification recipes
+deploy/vimrc           contest-grade vimrc → ~/.vimrc
+devenv.nix             gcc13 pin
+devenv.yaml            nixpkgs 25.05 pin, shell: bash
+lefthook.yml           pre-push checks (git)
+scripts/ci-wsl-env.sh  CI-only: devenv on PATH inside a fresh WSL step
+.github/workflows/ci.yml
+```
 
 ## Maintainer
 
@@ -101,21 +93,18 @@ just jj-setup                                  # make `jj push` run them first
 
 `lefthook.yml` runs the same `just` recipes CI does. `jj git push` does not run
 git hooks, so `just jj-setup` adds a jj alias that runs the checks and then
-pushes; without it, a jj push skips validation entirely.
+pushes.
 
 ## CI
 
-Three jobs, all green:
-
 | Job | What it proves |
 |---|---|
-| `lint` | shellcheck + vimrc parse + **actionlint** — the fast one, and the one that catches workflow mistakes before the slow jobs run |
-| `wsl` | blank Windows → install WSL → install Ubuntu 24.04 → run the student's command **inside WSL** |
+| `lint` | shellcheck + vimrc parse + **actionlint** |
+| `wsl` | blank Windows → install WSL Ubuntu 24.04 → run the student command **inside WSL** |
 | `oneliner-remote` | the literal `curl \| bash` from the README, against published `main` |
 
-The `wsl` job is the one that matters, because it is the only place the
-WSL-only code is exercised: the `IS_WSL` branch, the `/mnt/c` + `cmd.exe`
-interop that locates the Windows profile, the `.wslconfig` write to the Windows
-filesystem, and the no-TTY fallback when `/dev/tty` cannot be opened. It also
-runs `start.sh` a second time, which is what proves the whole path is
-idempotent.
+The `wsl` job is the one that matters. It also covers the paths a student's
+real machine takes and a fresh runner never does: a pre-existing `~/.vimrc`
+(planted sentinel must survive byte-for-byte), `start.sh` fetching the repo
+itself inside WSL, the whole path being re-runnable, and an assertion that
+nothing outside `~/.vimrc` was modified on the host.

@@ -176,6 +176,7 @@ jobs:
           working-dir: ~/ioi-env
           exec: |
             set -eu
+            . ~/ioi-env/scripts/ci-wsl-env.sh
             out=$(zsh -i -c 'echo "ver=$ZSH_VERSION"; [ -f "$ZSH/oh-my-zsh.sh" ] && echo "omz=$ZSH" || echo "omz=MISSING"; echo "theme=$ZSH_THEME"' 2>&1 || true)
             echo "$out" | grep -v '^%' | grep -v '^$'
             echo "$out" | grep -q "ver=5" || { echo "  FAIL: not running zsh 5.x"; exit 1; }

@@ -1,16 +1,31 @@
 # ioi-env — zsh + oh-my-zsh
 # 只在 ~/.zshrc 不存在時安裝；你已有的絕對不動。
 
-# oh-my-zsh 從 devenv profile 找（路徑穩定，不會隨 nix store 更新而失效）
-if [ -n "$DEVENV_ROOT" ] && [ -d "$DEVENV_ROOT/.devenv/profile/share/oh-my-zsh" ]; then
-  export ZSH="$DEVENV_ROOT/.devenv/profile/share/oh-my-zsh"
+# oh-my-zsh 住在 devenv profile 裡，路徑隨專案位置而異，所以多試幾個來源：
+#   DEVENV_ROOT        devenv shell 會設
+#   已知的 repo 位置     預設裝在 ~/ioi-env
+# 用 .devenv/profile 而不是 nix store path，因為後者的 hash 會隨更新變。
+_ioi_env_omz=""
+for _d in "${DEVENV_ROOT:-}" "$HOME/ioi-env" "$PWD/ioi-env" "$PWD"; do
+  [ -n "$_d" ] || continue
+  if [ -f "$_d/.devenv/profile/share/oh-my-zsh/oh-my-zsh.sh" ]; then
+    _ioi_env_omz="$_d/.devenv/profile/share/oh-my-zsh"
+    break
+  fi
+done
+
+if [ -n "$_ioi_env_omz" ]; then
+  export ZSH="$_ioi_env_omz"
   export ZSH_THEME="robbyrussell"
   plugins=(git)
   ZSH_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/oh-my-zsh"
   mkdir -p "$ZSH_CACHE_DIR"
+
+  # oh-my-zsh 需要可寫的 ZSH_CUSTOM 與 compinit；在 nix store 裡的它是唯讀的，
+  # compinit 會抱怨，所以指到 cache 目錄。
+  export ZSH_CUSTOM="$ZSH_CACHE_DIR/custom"
+  autoload -Uz compinit && compinit -u -d "$ZSH_CACHE_DIR/zcompdump"
+
   source "$ZSH/oh-my-zsh.sh"
 fi
-
-# 完成競賽環境的捷徑別名
-alias g++13='g++'
-alias a='./a'
+unset _ioi_env_omz _d
